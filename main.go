@@ -4,6 +4,7 @@ import (
 	"call-go/config"
 	"call-go/models"
 	"call-go/routes"
+	"call-go/utils"
 	"log"
 	"time"
 
@@ -11,6 +12,14 @@ import (
 )
 
 func main() {
+	// 加载配置
+	if err := config.LoadConfig(); err != nil {
+		log.Fatal("Failed to load config:", err)
+	}
+
+	// 设置JWT密钥
+	utils.SetJWTSecret(config.AppConfig.JWTSecret)
+
 	// 初始化数据库
 	if err := config.InitDB(); err != nil {
 		log.Fatal("Failed to initialize database:", err)
@@ -37,11 +46,12 @@ func main() {
 	routes.SetupRoutes(r)
 
 	// 启动服务器
-	log.Println("Server starting on :8080")
-	log.Println("API docs: http://localhost:8080/api/v1")
-	log.Println("Health check: http://localhost:8080/health")
+	port := config.AppConfig.ServerPort
+	log.Printf("Server starting on :%s", port)
+	log.Printf("API docs: http://localhost:%s/api/v1", port)
+	log.Printf("Health check: http://localhost:%s/health", port)
 	log.Println("Test accounts: testuser1/123456, testuser2/123456, testuser3/123456")
-	if err := r.Run(":8080"); err != nil {
+	if err := r.Run(":" + port); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
 }
