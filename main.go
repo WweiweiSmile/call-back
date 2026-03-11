@@ -2,6 +2,7 @@ package main
 
 import (
 	"call-go/config"
+	"call-go/middleware"
 	"call-go/models"
 	"call-go/routes"
 	"call-go/utils"
@@ -41,6 +42,9 @@ func main() {
 
 	// 设置 Gin
 	r := gin.Default()
+
+	// 使用 CORS 中间件（必须在路由之前）
+	r.Use(middleware.CORSMiddleware())
 
 	// 设置路由
 	routes.SetupRoutes(r)

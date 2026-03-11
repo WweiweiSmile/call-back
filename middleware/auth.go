@@ -11,6 +11,12 @@ import (
 // AuthMiddleware JWT 认证中间件
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 放行 OPTIONS 请求
+		if c.Request.Method == "OPTIONS" {
+			c.Next()
+			return
+		}
+
 		// 从 Authorization header 中获取 token
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
