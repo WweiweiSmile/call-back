@@ -34,8 +34,9 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
+          port: 22
           source: "./call_back"
-          target: "/www/wwwroot/call-back"
+          target: "/www/wwwroot/call-back/call_back"
 
       - name: 部署
         uses: appleboy/ssh-action@v1.2.0
@@ -44,7 +45,8 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          script:  nohup  /www/wwwroot/call-back  >go_log.out 2>go_err_log.out  &
+          port: 22
+          script:  nohup  /www/wwwroot/call-back/call_back  >go_log.out 2>go_err_log.out  &
       
 
 
