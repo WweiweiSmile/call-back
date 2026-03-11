@@ -9,6 +9,11 @@ import (
 
 var jwtSecret = []byte("call-game-secret-key-2026")
 
+// SetJWTSecret 设置JWT密钥
+func SetJWTSecret(secret string) {
+	jwtSecret = []byte(secret)
+}
+
 // Claims JWT 声明
 type Claims struct {
 	UserID   uint   `json:"user_id"`
