@@ -23,10 +23,10 @@ jobs:
           go-version: '1.23'
 
       - name: 更新go依赖
-        run: cd Back && pwd && go mod download
+        run: pwd && go mod download
 
       - name: 编译go程序
-        run: cd Back && pwd && go build -o nas_go ./src/main.go
+        run: pwd && go build -o call_back ./main.go
 
       - name: 上传执行文件
         uses: appleboy/scp-action@v0.1.7
@@ -34,8 +34,8 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          source: "./Back/nas_go"
-          target: "/usr/nas_exe"
+          source: "./call_back"
+          target: "/www/wwwroot/call-back"
 
       - name: 部署
         uses: appleboy/ssh-action@v1.2.0
@@ -44,9 +44,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          script: |
-            cd /usr/nas_exe/Back
-            nohup  /usr/nas_exe/Back/nas_go  >go_log.out 2>go_err_log.out  &
+          script:  nohup  /www/wwwroot/call-back  >go_log.out 2>go_err_log.out  &
       
 
 
