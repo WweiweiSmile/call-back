@@ -10,6 +10,10 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	gameStatusEnded = "ended"
+)
+
 type GameService struct{}
 
 // CreateGame 创建游戏
@@ -18,7 +22,7 @@ func (s *GameService) CreateGame(creatorID uint, req *dto.CreateGameRequest) (*m
 		Name:        req.Name,
 		Description: req.Description,
 		CreatorID:   creatorID,
-		Status:      "pending",
+		Status:      "", // 空字符串表示未结束
 		StartTime:   req.StartTime,
 		EndTime:     req.EndTime,
 		PlayerCount: 0,
@@ -37,12 +41,11 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 	var total int64
 
 	query := config.DB.Model(&models.Game{})
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
 	// 不显示已结束的游戏
-	query = query.Where("status != ?", "ended")
+	query = query.Where("status != ? OR status IS NULL", gameStatusEnded)
 
+	// 如果指定了状态筛选，需要在内存中筛选（因为状态是动态计算的）
+	// 先查询所有未结束的游戏
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
@@ -50,9 +53,16 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 		return nil, err
 	}
 
-	// 转换为响应格式
+	// 转换为响应格式，并在内存中进行状态筛选
 	gameResponses := make([]dto.GameResponse, 0, len(games))
 	for _, game := range games {
+		effectiveStatus := game.GetEffectiveStatus()
+
+		// 如果指定了状态筛选，跳过不符合的
+		if status != "" && effectiveStatus != status {
+			continue
+		}
+
 		// 检查用户是否已加入
 		var userGame models.UserGame
 		isJoined := false
@@ -61,19 +71,7 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 			isJoined = true
 		}
 
-		gameResponses = append(gameResponses, dto.GameResponse{
-			ID:          game.ID,
-			Name:        game.Name,
-			Description: game.Description,
-			CreatorID:   game.CreatorID,
-			Status:      game.Status,
-			StartTime:   game.StartTime,
-			EndTime:     game.EndTime,
-			PlayerCount: game.PlayerCount,
-			CreatedAt:   game.CreatedAt,
-			IsCreator:   game.CreatorID == userID,
-			IsJoined:    isJoined,
-		})
+		gameResponses = append(gameResponses, dto.ToGameResponse(&game, userID, isJoined))
 	}
 
 	return &dto.GameListResponse{
@@ -99,8 +97,8 @@ func (s *GameService) JoinGame(userID, gameID uint) error {
 		return errors.New("游戏不存在")
 	}
 
-	// 检查游戏状态
-	if game.Status != "pending" && game.Status != "ongoing" {
+	// 检查游戏是否已结束
+	if game.IsEnded() {
 		return errors.New("游戏已结束，无法加入")
 	}
 
@@ -196,22 +194,10 @@ func (s *GameService) GetMyGames(userID uint, page, pageSize int) (*dto.GameList
 	gameResponses := make([]dto.GameResponse, 0, len(userGames))
 	for _, ug := range userGames {
 		// 不显示已结束的游戏
-		if ug.Game.Status == "ended" {
+		if ug.Game.IsEnded() {
 			continue
 		}
-		gameResponses = append(gameResponses, dto.GameResponse{
-			ID:          ug.Game.ID,
-			Name:        ug.Game.Name,
-			Description: ug.Game.Description,
-			CreatorID:   ug.Game.CreatorID,
-			Status:      ug.Game.Status,
-			StartTime:   ug.Game.StartTime,
-			EndTime:     ug.Game.EndTime,
-			PlayerCount: ug.Game.PlayerCount,
-			CreatedAt:   ug.Game.CreatedAt,
-			IsCreator:   ug.Game.CreatorID == userID,
-			IsJoined:    true,
-		})
+		gameResponses = append(gameResponses, dto.ToGameResponse(&ug.Game, userID, true))
 	}
 
 	return &dto.GameListResponse{
@@ -227,7 +213,7 @@ func (s *GameService) GetCreatedGames(userID uint, page, pageSize int) (*dto.Gam
 
 	query := config.DB.Model(&models.Game{}).Where("creator_id = ?", userID)
 	// 不显示已结束的游戏
-	query = query.Where("status != ?", "ended")
+	query = query.Where("status != ? OR status IS NULL", gameStatusEnded)
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
@@ -237,18 +223,7 @@ func (s *GameService) GetCreatedGames(userID uint, page, pageSize int) (*dto.Gam
 
 	gameResponses := make([]dto.GameResponse, 0, len(games))
 	for _, game := range games {
-		gameResponses = append(gameResponses, dto.GameResponse{
-			ID:          game.ID,
-			Name:        game.Name,
-			Description: game.Description,
-			CreatorID:   game.CreatorID,
-			Status:      game.Status,
-			StartTime:   game.StartTime,
-			EndTime:     game.EndTime,
-			PlayerCount: game.PlayerCount,
-			CreatedAt:   game.CreatedAt,
-			IsCreator:   true,
-		})
+		gameResponses = append(gameResponses, dto.ToGameResponse(&game, userID, false))
 	}
 
 	return &dto.GameListResponse{
@@ -268,12 +243,12 @@ func (s *GameService) EndGame(creatorID, gameID uint) error {
 		return errors.New("只有创建者可以结束游戏")
 	}
 
-	if game.Status == "ended" {
+	if game.IsEnded() {
 		return errors.New("游戏已经结束")
 	}
 
 	// 更新游戏状态为已结束
-	game.Status = "ended"
+	game.Status = models.GameStatusEnded
 	if err := config.DB.Save(&game).Error; err != nil {
 		return err
 	}

@@ -2,15 +2,28 @@ package main
 
 import (
 	"call-go/config"
+	"call-go/middleware"
 	"call-go/models"
 	"call-go/routes"
+	"call-go/utils"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
+	// 加载配置
+	if err := config.LoadConfig(); err != nil {
+		log.Fatal("Failed to load config:", err)
+	}
+
+	// 设置JWT密钥
+	utils.SetJWTSecret(config.AppConfig.JWTSecret)
+
 	// 初始化数据库
 	if err := config.InitDB(); err != nil {
 		log.Fatal("Failed to initialize database:", err)
@@ -33,17 +46,31 @@ func main() {
 	// 设置 Gin
 	r := gin.Default()
 
+	// 使用 CORS 中间件（必须在路由之前）
+	r.Use(middleware.CORSMiddleware())
+
 	// 设置路由
 	routes.SetupRoutes(r)
 
-	// 启动服务器
-	log.Println("Server starting on :8080")
-	log.Println("API docs: http://localhost:8080/api/v1")
-	log.Println("Health check: http://localhost:8080/health")
+	// 在 goroutine 中启动服务器
+	port := config.AppConfig.ServerPort
+	log.Printf("Server starting on :%s", port)
+	log.Printf("API docs: http://localhost:%s/api/v1", port)
+	log.Printf("Health check: http://localhost:%s/health", port)
 	log.Println("Test accounts: testuser1/123456, testuser2/123456, testuser3/123456")
-	if err := r.Run(":8080"); err != nil {
-		log.Fatal("Failed to start server:", err)
-	}
+
+	go func() {
+		if err := r.Run(":" + port); err != nil {
+			log.Fatal("Failed to start server:", err)
+		}
+	}()
+
+	// 等待终止信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down gracefully...")
 }
 
 func seedTestData() {
@@ -70,28 +97,33 @@ func seedTestData() {
 
 	// 创建测试游戏
 	now := time.Now()
+	oneHourLater := now.Add(1 * time.Hour)
+	oneHourAgo := now.Add(-1 * time.Hour)
 	games := []models.Game{
 		{
 			Name:        "周末扑克局",
-			Description: "每周六晚的固定局",
+			Description: "每周六晚的固定局（已开始）",
 			CreatorID:   users[1].ID,
-			Status:      "ongoing",
+			Status:      "", // 空字符串表示未结束
+			StartTime:   &oneHourAgo,
 			PlayerCount: 12,
 			CreatedAt:   now,
 		},
 		{
 			Name:        "麻将友谊赛",
-			Description: "我创建的游戏",
+			Description: "我创建的游戏（已开始）",
 			CreatorID:   users[0].ID,
-			Status:      "ongoing",
+			Status:      "",
+			StartTime:   &oneHourAgo,
 			PlayerCount: 5,
 			CreatedAt:   now,
 		},
 		{
 			Name:        "新手练习场",
-			Description: "",
+			Description: "1小时后开始（未开始）",
 			CreatorID:   users[2].ID,
-			Status:      "pending",
+			Status:      "",
+			StartTime:   &oneHourLater,
 			PlayerCount: 3,
 			CreatedAt:   now,
 		},

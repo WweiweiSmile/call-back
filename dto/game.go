@@ -1,6 +1,9 @@
 package dto
 
-import "time"
+import (
+	"call-go/models"
+	"time"
+)
 
 // CreateGameRequest 创建游戏请求
 type CreateGameRequest struct {
@@ -33,6 +36,23 @@ type GameResponse struct {
 
 // GameListResponse 游戏列表响应
 type GameListResponse struct {
-	Total int64           `json:"total"`
-	List  []GameResponse  `json:"list"`
+	Total int64          `json:"total"`
+	List  []GameResponse `json:"list"`
+}
+
+// ToGameResponse 将 Game 模型转换为 GameResponse（使用动态计算的状态）
+func ToGameResponse(game *models.Game, currentUserID uint, isJoined bool) GameResponse {
+	return GameResponse{
+		ID:          game.ID,
+		Name:        game.Name,
+		Description: game.Description,
+		CreatorID:   game.CreatorID,
+		Status:      game.GetEffectiveStatus(),
+		StartTime:   game.StartTime,
+		EndTime:     game.EndTime,
+		PlayerCount: game.PlayerCount,
+		CreatedAt:   game.CreatedAt,
+		IsCreator:   game.CreatorID == currentUserID,
+		IsJoined:    isJoined,
+	}
 }

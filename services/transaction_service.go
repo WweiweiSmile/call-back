@@ -26,10 +26,18 @@ func (s *TransactionService) Deposit(operatorID uint, req *dto.DepositRequest) (
 		return nil, errors.New("游戏不存在")
 	}
 
-	// 检查游戏状态
-	if game.Status != "ongoing" {
-		return nil, errors.New("游戏未开始或已结束")
+	// 检查游戏状态 - 只能在进行中的游戏进行操作
+	// 结束状态：判断数据库中的 status 是不是等于 "ended"
+	if game.Status == "ended" {
+		return nil, errors.New("游戏已结束")
 	}
+	// 未开始状态：判断服务器时间是否小于数据库中的"开始时间"
+	now := time.Now()
+	if game.StartTime != nil && now.Before(*game.StartTime) {
+		return nil, errors.New("游戏未开始")
+	}
+	// 运行状态：服务器时间大于数据库中的"开始时间"，并且 status 状态不为 "ended"
+	// 只有满足运行状态才允许存分/取分
 
 	// 检查权限
 	operatorType := "self"
@@ -131,10 +139,18 @@ func (s *TransactionService) Withdraw(operatorID uint, req *dto.WithdrawRequest)
 		return nil, errors.New("游戏不存在")
 	}
 
-	// 检查游戏状态
-	if game.Status != "ongoing" {
-		return nil, errors.New("游戏未开始或已结束")
+	// 检查游戏状态 - 只能在进行中的游戏进行操作
+	// 结束状态：判断数据库中的 status 是不是等于 "ended"
+	if game.Status == "ended" {
+		return nil, errors.New("游戏已结束")
 	}
+	// 未开始状态：判断服务器时间是否小于数据库中的"开始时间"
+	now := time.Now()
+	if game.StartTime != nil && now.Before(*game.StartTime) {
+		return nil, errors.New("游戏未开始")
+	}
+	// 运行状态：服务器时间大于数据库中的"开始时间"，并且 status 状态不为 "ended"
+	// 只有满足运行状态才允许存分/取分
 
 	// 检查权限
 	operatorType := "self"

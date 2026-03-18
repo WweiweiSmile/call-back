@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"call-go/config"
 	"call-go/dto"
 	"call-go/middleware"
+	"call-go/models"
 	"call-go/services"
 	"net/http"
 	"strconv"
@@ -36,7 +38,9 @@ func (c *GameController) CreateGame(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.SuccessResponse(game))
+	// 使用动态计算的状态返回
+	resp := dto.ToGameResponse(game, userID, false)
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(resp))
 }
 
 // GetGameList 获取游戏列表
@@ -70,7 +74,19 @@ func (c *GameController) GetGame(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.SuccessResponse(game))
+	userID := middleware.GetUserID(ctx)
+
+	// 检查用户是否已加入
+	var userGame models.UserGame
+	isJoined := false
+	config.DB.Where("user_id = ? AND game_id = ? AND status = 'active'", userID, game.ID).First(&userGame)
+	if userGame.ID > 0 {
+		isJoined = true
+	}
+
+	// 使用统一的转换函数，包含动态计算的状态
+	resp := dto.ToGameResponse(game, userID, isJoined)
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(resp))
 }
 
 // JoinGame 加入游戏
