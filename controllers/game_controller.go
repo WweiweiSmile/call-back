@@ -86,6 +86,15 @@ func (c *GameController) GetGame(ctx *gin.Context) {
 
 	// 使用统一的转换函数，包含动态计算的状态
 	resp := dto.ToGameResponse(game, userID, isJoined)
+	// 填充创建人用户名
+	var creator models.User
+	if err := config.DB.First(&creator, game.CreatorID).Error; err == nil {
+		if creator.Nickname != "" {
+			resp.CreatorName = creator.Nickname
+		} else {
+			resp.CreatorName = creator.Username
+		}
+	}
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(resp))
 }
 

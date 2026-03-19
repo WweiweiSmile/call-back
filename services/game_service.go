@@ -71,7 +71,17 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 			isJoined = true
 		}
 
-		gameResponses = append(gameResponses, dto.ToGameResponse(&game, userID, isJoined))
+		resp := dto.ToGameResponse(&game, userID, isJoined)
+		// 填充创建人用户名
+		var creator models.User
+		if err := config.DB.First(&creator, game.CreatorID).Error; err == nil {
+			if creator.Nickname != "" {
+				resp.CreatorName = creator.Nickname
+			} else {
+				resp.CreatorName = creator.Username
+			}
+		}
+		gameResponses = append(gameResponses, resp)
 	}
 
 	return &dto.GameListResponse{
@@ -197,7 +207,17 @@ func (s *GameService) GetMyGames(userID uint, page, pageSize int) (*dto.GameList
 		if ug.Game.IsEnded() {
 			continue
 		}
-		gameResponses = append(gameResponses, dto.ToGameResponse(&ug.Game, userID, true))
+		resp := dto.ToGameResponse(&ug.Game, userID, true)
+		// 填充创建人用户名
+		var creator models.User
+		if err := config.DB.First(&creator, ug.Game.CreatorID).Error; err == nil {
+			if creator.Nickname != "" {
+				resp.CreatorName = creator.Nickname
+			} else {
+				resp.CreatorName = creator.Username
+			}
+		}
+		gameResponses = append(gameResponses, resp)
 	}
 
 	return &dto.GameListResponse{
@@ -223,7 +243,17 @@ func (s *GameService) GetCreatedGames(userID uint, page, pageSize int) (*dto.Gam
 
 	gameResponses := make([]dto.GameResponse, 0, len(games))
 	for _, game := range games {
-		gameResponses = append(gameResponses, dto.ToGameResponse(&game, userID, false))
+		resp := dto.ToGameResponse(&game, userID, false)
+		// 填充创建人用户名
+		var creator models.User
+		if err := config.DB.First(&creator, game.CreatorID).Error; err == nil {
+			if creator.Nickname != "" {
+				resp.CreatorName = creator.Nickname
+			} else {
+				resp.CreatorName = creator.Username
+			}
+		}
+		gameResponses = append(gameResponses, resp)
 	}
 
 	return &dto.GameListResponse{
