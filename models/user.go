@@ -15,8 +15,8 @@ type User struct {
 	Avatar    string         `json:"avatar" gorm:"size:500;comment:头像URL"`
 	Password  string         `json:"-" gorm:"size:255;not null;comment:密码"`
 	Status    string         `json:"status" gorm:"size:20;default:'active';comment:状态: active-正常, inactive-禁用"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
