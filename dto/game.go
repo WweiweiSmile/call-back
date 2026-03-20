@@ -9,13 +9,13 @@ import (
 type CreateGameRequest struct {
 	Name        string     `json:"name" binding:"required"`
 	Description string     `json:"description"`
-	StartTime   *time.Time `json:"start_time"`
-	EndTime     *time.Time `json:"end_time"`
+	StartTime   *time.Time `json:"startTime"`
+	EndTime     *time.Time `json:"endTime"`
 }
 
 // JoinGameRequest 加入游戏请求
 type JoinGameRequest struct {
-	GameID uint `json:"game_id" binding:"required"`
+	GameID uint `json:"gameId" binding:"required"`
 }
 
 // GameResponse 游戏响应
@@ -23,15 +23,15 @@ type GameResponse struct {
 	ID          uint       `json:"id"`
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
-	CreatorID   uint       `json:"creator_id"`
-	CreatorName string     `json:"creator_name,omitempty"`
+	CreatorID   uint       `json:"creatorId"`
+	CreatorName string     `json:"creatorName,omitempty"`
 	Status      string     `json:"status"`
-	StartTime   *time.Time `json:"start_time"`
-	EndTime     *time.Time `json:"end_time"`
-	PlayerCount int        `json:"player_count"`
-	CreatedAt   time.Time  `json:"created_at"`
-	IsCreator   bool       `json:"is_creator,omitempty"`
-	IsJoined    bool       `json:"is_joined,omitempty"`
+	StartTime   *time.Time `json:"startTime"`
+	EndTime     *time.Time `json:"endTime"`
+	PlayerCount int        `json:"playerCount"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	IsCreator   bool       `json:"isCreator,omitempty"`
+	IsJoined    bool       `json:"isJoined,omitempty"`
 }
 
 // GameListResponse 游戏列表响应

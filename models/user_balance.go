@@ -9,15 +9,15 @@ import (
 // UserBalance 场次余额表
 type UserBalance struct {
 	ID             uint           `json:"id" gorm:"primaryKey"`
-	UserID         uint           `json:"user_id" gorm:"not null;index:idx_user_game_balance;comment:用户ID"`
-	GameID         uint           `json:"game_id" gorm:"not null;index:idx_user_game_balance;comment:场次ID"`
-	TotalDeposit   int64          `json:"total_deposit" gorm:"default:0;comment:场次存分总量"`
-	TotalWithdraw  int64          `json:"total_withdraw" gorm:"default:0;comment:场次取分总量"`
-	CurrentBalance int64          `json:"current_balance" gorm:"default:0;comment:场次当前余额"`
-	LastTransTime  *time.Time     `json:"last_trans_time" gorm:"comment:最后交易时间"`
-	BalanceStatus  string         `json:"balance_status" gorm:"size:20;default:'balanced';comment:平衡状态: balanced-平衡, unbalanced-不平衡"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	UserID         uint           `json:"userId" gorm:"not null;index:idx_user_game_balance;comment:用户ID"`
+	GameID         uint           `json:"gameId" gorm:"not null;index:idx_user_game_balance;comment:场次ID"`
+	TotalDeposit   int64          `json:"totalDeposit" gorm:"default:0;comment:场次存分总量"`
+	TotalWithdraw  int64          `json:"totalWithdraw" gorm:"default:0;comment:场次取分总量"`
+	CurrentBalance int64          `json:"currentBalance" gorm:"default:0;comment:场次当前余额"`
+	LastTransTime  *time.Time     `json:"lastTransTime" gorm:"comment:最后交易时间"`
+	BalanceStatus  string         `json:"balanceStatus" gorm:"size:20;default:'balanced';comment:平衡状态: balanced-平衡, unbalanced-不平衡"`
+	CreatedAt      time.Time      `json:"createdAt"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
 	DeletedAt      gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
