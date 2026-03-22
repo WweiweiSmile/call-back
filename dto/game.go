@@ -7,10 +7,10 @@ import (
 
 // CreateGameRequest 创建游戏请求
 type CreateGameRequest struct {
-	Name        string     `json:"name" binding:"required"`
-	Description string     `json:"description"`
-	StartTime   *time.Time `json:"startTime"`
-	EndTime     *time.Time `json:"endTime"`
+	Name        string       `json:"name" binding:"required"`
+	Description string       `json:"description"`
+	StartTime   NullableTime `json:"startTime"`
+	EndTime     NullableTime `json:"endTime"`
 }
 
 // JoinGameRequest 加入游戏请求

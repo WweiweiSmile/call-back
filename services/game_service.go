@@ -23,8 +23,8 @@ func (s *GameService) CreateGame(creatorID uint, req *dto.CreateGameRequest) (*m
 		Description: req.Description,
 		CreatorID:   creatorID,
 		Status:      "", // 空字符串表示未结束
-		StartTime:   req.StartTime,
-		EndTime:     req.EndTime,
+		StartTime:   req.StartTime.ToTimePointer(),
+		EndTime:     req.EndTime.ToTimePointer(),
 		PlayerCount: 0,
 	}
 
