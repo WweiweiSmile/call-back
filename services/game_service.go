@@ -189,7 +189,7 @@ func (s *GameService) LeaveGame(userID, gameID uint) error {
 }
 
 // GetMyGames 获取我的游戏
-func (s *GameService) GetMyGames(userID uint, page, pageSize int) (*dto.GameListResponse, error) {
+func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int) (*dto.GameListResponse, error) {
 	var userGames []models.UserGame
 	var total int64
 
@@ -203,10 +203,28 @@ func (s *GameService) GetMyGames(userID uint, page, pageSize int) (*dto.GameList
 
 	gameResponses := make([]dto.GameResponse, 0, len(userGames))
 	for _, ug := range userGames {
-		// 不显示已结束的游戏
-		if ug.Game.IsEnded() {
+		effectiveStatus := ug.Game.GetEffectiveStatus()
+
+		// 根据状态筛选
+		shouldInclude := true
+		switch status {
+		case "ongoing":
+			shouldInclude = effectiveStatus == models.GameStatusOngoing
+		case "ended":
+			shouldInclude = effectiveStatus == models.GameStatusEnded
+		case "recent":
+			// 最近玩过 - 这里简化处理，包含所有游戏
+			shouldInclude = true
+		case "all":
+			fallthrough
+		default:
+			shouldInclude = true
+		}
+
+		if !shouldInclude {
 			continue
 		}
+
 		resp := dto.ToGameResponse(&ug.Game, userID, true)
 		// 填充创建人用户名
 		var creator models.User
@@ -277,9 +295,8 @@ func (s *GameService) EndGame(creatorID, gameID uint) error {
 		return errors.New("游戏已经结束")
 	}
 
-	// 更新游戏状态为已结束
-	game.Status = models.GameStatusEnded
-	if err := config.DB.Save(&game).Error; err != nil {
+	// 更新游戏状态为已结束 - 使用 Updates 方法确保字段正确更新
+	if err := config.DB.Model(&game).Update("status", models.GameStatusEnded).Error; err != nil {
 		return err
 	}
 

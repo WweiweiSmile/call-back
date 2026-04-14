@@ -157,12 +157,13 @@ func (c *GameController) EndGame(ctx *gin.Context) {
 
 // GetMyGames 获取我的游戏
 func (c *GameController) GetMyGames(ctx *gin.Context) {
+	status := ctx.Query("status")
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "100"))
 
 	userID := middleware.GetUserID(ctx)
 
-	list, err := c.gameService.GetMyGames(userID, page, pageSize)
+	list, err := c.gameService.GetMyGames(userID, status, page, pageSize)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取我的游戏失败: "+err.Error()))
 		return
