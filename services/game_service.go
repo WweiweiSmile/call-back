@@ -93,7 +93,9 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 // GetGame 获取游戏详情
 func (s *GameService) GetGame(gameID uint) (*models.Game, error) {
 	var game models.Game
-	if err := config.DB.First(&game, gameID).Error; err != nil {
+	// 使用 Unscoped 来包含已软删除的游戏
+	// 确保已结束的游戏即使被软删除也能被查到
+	if err := config.DB.Unscoped().First(&game, gameID).Error; err != nil {
 		return nil, err
 	}
 	return &game, nil
@@ -101,7 +103,7 @@ func (s *GameService) GetGame(gameID uint) (*models.Game, error) {
 
 // JoinGame 加入游戏
 func (s *GameService) JoinGame(userID, gameID uint) error {
-	// 检查游戏是否存在
+	// 检查游戏是否存在（不包括已软删除的游戏）
 	var game models.Game
 	if err := config.DB.First(&game, gameID).Error; err != nil {
 		return errors.New("游戏不存在")
@@ -197,13 +199,37 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
-	if err := query.Preload("Game").Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&userGames).Error; err != nil {
+	// 自定义 Preload，使用 Unscoped 来包含已软删除的游戏
+	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&userGames).Error; err != nil {
 		return nil, err
+	}
+
+	// 手动加载游戏数据（包含软删除的）
+	gameIDs := make([]uint, 0, len(userGames))
+	for _, ug := range userGames {
+		gameIDs = append(gameIDs, ug.GameID)
+	}
+
+	var games []models.Game
+	if len(gameIDs) > 0 {
+		config.DB.Unscoped().Find(&games, gameIDs)
+	}
+
+	// 创建游戏 map 方便查找
+	gameMap := make(map[uint]models.Game)
+	for _, g := range games {
+		gameMap[g.ID] = g
 	}
 
 	gameResponses := make([]dto.GameResponse, 0, len(userGames))
 	for _, ug := range userGames {
-		effectiveStatus := ug.Game.GetEffectiveStatus()
+		// 从 map 中获取游戏
+		game, exists := gameMap[ug.GameID]
+		if !exists || game.ID == 0 {
+			continue // 游戏不存在，跳过
+		}
+
+		effectiveStatus := game.GetEffectiveStatus()
 
 		// 根据状态筛选
 		shouldInclude := true
@@ -225,10 +251,10 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 			continue
 		}
 
-		resp := dto.ToGameResponse(&ug.Game, userID, true)
+		resp := dto.ToGameResponse(&game, userID, true)
 		// 填充创建人用户名
 		var creator models.User
-		if err := config.DB.First(&creator, ug.Game.CreatorID).Error; err == nil {
+		if err := config.DB.First(&creator, game.CreatorID).Error; err == nil {
 			if creator.Nickname != "" {
 				resp.CreatorName = creator.Nickname
 			} else {
@@ -295,8 +321,12 @@ func (s *GameService) EndGame(creatorID, gameID uint) error {
 		return errors.New("游戏已经结束")
 	}
 
-	// 更新游戏状态为已结束 - 使用 Updates 方法确保字段正确更新
-	if err := config.DB.Model(&game).Update("status", models.GameStatusEnded).Error; err != nil {
+	now := time.Now()
+	// 更新游戏状态为已结束，同时设置结束时间
+	if err := config.DB.Model(&game).Updates(map[string]interface{}{
+		"status":   models.GameStatusEnded,
+		"end_time": now,
+	}).Error; err != nil {
 		return err
 	}
 
