@@ -10,7 +10,6 @@ type CreateGameRequest struct {
 	Name        string       `json:"name" binding:"required"`
 	Description string       `json:"description"`
 	StartTime   NullableTime `json:"startTime"`
-	EndTime     NullableTime `json:"endTime"`
 }
 
 // JoinGameRequest 加入游戏请求

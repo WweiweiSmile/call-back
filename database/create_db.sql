@@ -23,16 +23,14 @@ CREATE TABLE IF NOT EXISTS games (
     name VARCHAR(255) NOT NULL COMMENT '游戏名称',
     description TEXT COMMENT '游戏描述',
     creator_id BIGINT UNSIGNED NOT NULL COMMENT '创建者ID',
-    status VARCHAR(20) DEFAULT 'pending' COMMENT '状态: pending-即将开始, ongoing-进行中, ended-已结束',
+    status VARCHAR(20) DEFAULT '' COMMENT '状态: ''-未结束, ended-已结束',
     start_time DATETIME NULL COMMENT '开始时间',
     end_time DATETIME NULL COMMENT '结束时间',
     player_count INT DEFAULT 0 COMMENT '当前人数',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deleted_at DATETIME NULL,
     INDEX idx_creator_id (creator_id),
-    INDEX idx_status (status),
-    INDEX idx_deleted_at (deleted_at)
+    INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='游戏场次表';
 
 -- 用户-场次关联表
@@ -99,7 +97,7 @@ INSERT INTO users (username, nickname, status) VALUES
 ('testuser3', '李四', 'active');
 
 -- 插入测试游戏
-INSERT INTO games (name, description, creator_id, status, player_count) VALUES 
-('周末扑克局', '每周六晚的固定局', 2, 'ongoing', 12),
-('麻将友谊赛', '我创建的游戏', 1, 'ongoing', 5),
-('新手练习场', '', 3, 'pending', 3);
+INSERT INTO games (name, description, creator_id, status, player_count) VALUES
+('周末扑克局', '每周六晚的固定局', 2, '', 12),
+('麻将友谊赛', '我创建的游戏', 1, '', 5),
+('新手练习场', '', 3, '', 3);

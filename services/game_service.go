@@ -18,13 +18,18 @@ type GameService struct{}
 
 // CreateGame 创建游戏
 func (s *GameService) CreateGame(creatorID uint, req *dto.CreateGameRequest) (*models.Game, error) {
+	startTime := req.StartTime.ToTimePointer()
+	if startTime == nil {
+		now := time.Now()
+		startTime = &now
+	}
+
 	game := &models.Game{
 		Name:        req.Name,
 		Description: req.Description,
 		CreatorID:   creatorID,
 		Status:      "", // 空字符串表示未结束
-		StartTime:   req.StartTime.ToTimePointer(),
-		EndTime:     req.EndTime.ToTimePointer(),
+		StartTime:   startTime,
 		PlayerCount: 0,
 	}
 
@@ -41,11 +46,13 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 	var total int64
 
 	query := config.DB.Model(&models.Game{})
-	// 不显示已结束的游戏
-	query = query.Where("status != ? OR status IS NULL", gameStatusEnded)
 
-	// 如果指定了状态筛选，需要在内存中筛选（因为状态是动态计算的）
-	// 先查询所有未结束的游戏
+	// 根据 status 参数决定是否过滤已结束的游戏
+	if status != "ended" {
+		// 默认不显示已结束的游戏，除非明确查询 ended
+		query = query.Where("status != ? OR status IS NULL", gameStatusEnded)
+	}
+
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
@@ -93,9 +100,7 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 // GetGame 获取游戏详情
 func (s *GameService) GetGame(gameID uint) (*models.Game, error) {
 	var game models.Game
-	// 使用 Unscoped 来包含已软删除的游戏
-	// 确保已结束的游戏即使被软删除也能被查到
-	if err := config.DB.Unscoped().First(&game, gameID).Error; err != nil {
+	if err := config.DB.First(&game, gameID).Error; err != nil {
 		return nil, err
 	}
 	return &game, nil
@@ -103,7 +108,7 @@ func (s *GameService) GetGame(gameID uint) (*models.Game, error) {
 
 // JoinGame 加入游戏
 func (s *GameService) JoinGame(userID, gameID uint) error {
-	// 检查游戏是否存在（不包括已软删除的游戏）
+	// 检查游戏是否存在
 	var game models.Game
 	if err := config.DB.First(&game, gameID).Error; err != nil {
 		return errors.New("游戏不存在")
@@ -199,12 +204,11 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
-	// 自定义 Preload，使用 Unscoped 来包含已软删除的游戏
 	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&userGames).Error; err != nil {
 		return nil, err
 	}
 
-	// 手动加载游戏数据（包含软删除的）
+	// 手动加载游戏数据
 	gameIDs := make([]uint, 0, len(userGames))
 	for _, ug := range userGames {
 		gameIDs = append(gameIDs, ug.GameID)
@@ -212,7 +216,7 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 
 	var games []models.Game
 	if len(gameIDs) > 0 {
-		config.DB.Unscoped().Find(&games, gameIDs)
+		config.DB.Find(&games, gameIDs)
 	}
 
 	// 创建游戏 map 方便查找
