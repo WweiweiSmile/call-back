@@ -24,15 +24,13 @@ type Claims struct {
 // GenerateToken 生成 JWT token
 func GenerateToken(userID uint, username string) (string, error) {
 	nowTime := time.Now()
-	expireTime := nowTime.Add(24 * time.Hour * 7) // 7天过期
 
 	claims := Claims{
 		UserID:   userID,
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expireTime),
-			IssuedAt:  jwt.NewNumericDate(nowTime),
-			Issuer:    "call-game",
+			IssuedAt: jwt.NewNumericDate(nowTime),
+			Issuer:   "call-game",
 		},
 	}
 
