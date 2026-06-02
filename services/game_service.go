@@ -219,10 +219,21 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 		config.DB.Find(&games, gameIDs)
 	}
 
-	// 创建游戏 map 方便查找
+	// 查询用户在这些游戏中的余额
+	var balances []models.UserBalance
+	if len(gameIDs) > 0 {
+		config.DB.Where("user_id = ? AND game_id IN ?", userID, gameIDs).Find(&balances)
+	}
+
+	// 创建 map 方便查找
 	gameMap := make(map[uint]models.Game)
 	for _, g := range games {
 		gameMap[g.ID] = g
+	}
+
+	balanceMap := make(map[uint]models.UserBalance)
+	for _, b := range balances {
+		balanceMap[b.GameID] = b
 	}
 
 	gameResponses := make([]dto.GameResponse, 0, len(userGames))
@@ -255,7 +266,13 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 			continue
 		}
 
-		resp := dto.ToGameResponse(&game, userID, true)
+		// 获取用户余额
+		var balance *models.UserBalance
+		if b, ok := balanceMap[game.ID]; ok {
+			balance = &b
+		}
+
+		resp := dto.ToGameResponseWithBalance(&game, userID, true, balance)
 		// 填充创建人用户名
 		var creator models.User
 		if err := config.DB.First(&creator, game.CreatorID).Error; err == nil {

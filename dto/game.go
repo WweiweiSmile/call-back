@@ -19,18 +19,21 @@ type JoinGameRequest struct {
 
 // GameResponse 游戏响应
 type GameResponse struct {
-	ID          uint       `json:"id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	CreatorID   uint       `json:"creatorId"`
-	CreatorName string     `json:"creatorName,omitempty"`
-	Status      string     `json:"status"`
-	StartTime   *time.Time `json:"startTime"`
-	EndTime     *time.Time `json:"endTime"`
-	PlayerCount int        `json:"playerCount"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	IsCreator   bool       `json:"isCreator,omitempty"`
-	IsJoined    bool       `json:"isJoined,omitempty"`
+	ID                uint       `json:"id"`
+	Name              string     `json:"name"`
+	Description       string     `json:"description"`
+	CreatorID         uint       `json:"creatorId"`
+	CreatorName       string     `json:"creatorName,omitempty"`
+	Status            string     `json:"status"`
+	StartTime         *time.Time `json:"startTime"`
+	EndTime           *time.Time `json:"endTime"`
+	PlayerCount       int        `json:"playerCount"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	IsCreator         bool       `json:"isCreator,omitempty"`
+	IsJoined          bool       `json:"isJoined,omitempty"`
+	UserTotalDeposit  int64      `json:"userTotalDeposit,omitempty"`
+	UserTotalWithdraw int64      `json:"userTotalWithdraw,omitempty"`
+	UserNetScore      int64      `json:"userNetScore,omitempty"`
 }
 
 // GameListResponse 游戏列表响应
@@ -54,4 +57,15 @@ func ToGameResponse(game *models.Game, currentUserID uint, isJoined bool) GameRe
 		IsCreator:   game.CreatorID == currentUserID,
 		IsJoined:    isJoined,
 	}
+}
+
+// ToGameResponseWithBalance 将 Game 模型转换为 GameResponse，并包含用户余额信息
+func ToGameResponseWithBalance(game *models.Game, currentUserID uint, isJoined bool, balance *models.UserBalance) GameResponse {
+	resp := ToGameResponse(game, currentUserID, isJoined)
+	if balance != nil {
+		resp.UserTotalDeposit = balance.TotalDeposit
+		resp.UserTotalWithdraw = balance.TotalWithdraw
+		resp.UserNetScore = balance.TotalDeposit - balance.TotalWithdraw
+	}
+	return resp
 }
