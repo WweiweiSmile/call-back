@@ -42,7 +42,7 @@ func GenerateToken(userID uint, username string) (string, error) {
 func ParseToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
-	})
+	}, jwt.WithoutClaimsValidation())
 
 	if err != nil {
 		return nil, err
