@@ -7,9 +7,8 @@ import (
 
 // CreateGameRequest 创建游戏请求
 type CreateGameRequest struct {
-	Name        string       `json:"name" binding:"required"`
-	Description string       `json:"description"`
-	StartTime   NullableTime `json:"startTime"`
+	Name        string `json:"name" binding:"required"`
+	Description string `json:"description"`
 }
 
 // JoinGameRequest 加入游戏请求
@@ -25,7 +24,6 @@ type GameResponse struct {
 	CreatorID         uint       `json:"creatorId"`
 	CreatorName       string     `json:"creatorName,omitempty"`
 	Status            string     `json:"status"`
-	StartTime         *time.Time `json:"startTime"`
 	EndTime           *time.Time `json:"endTime"`
 	PlayerCount       int        `json:"playerCount"`
 	CreatedAt         time.Time  `json:"createdAt"`
@@ -42,7 +40,7 @@ type GameListResponse struct {
 	List  []GameResponse `json:"list"`
 }
 
-// ToGameResponse 将 Game 模型转换为 GameResponse（使用动态计算的状态）
+// ToGameResponse 将 Game 模型转换为 GameResponse
 func ToGameResponse(game *models.Game, currentUserID uint, isJoined bool) GameResponse {
 	return GameResponse{
 		ID:          game.ID,
@@ -50,7 +48,6 @@ func ToGameResponse(game *models.Game, currentUserID uint, isJoined bool) GameRe
 		Description: game.Description,
 		CreatorID:   game.CreatorID,
 		Status:      game.GetEffectiveStatus(),
-		StartTime:   game.StartTime,
 		EndTime:     game.EndTime,
 		PlayerCount: game.PlayerCount,
 		CreatedAt:   game.CreatedAt,

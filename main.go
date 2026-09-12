@@ -97,33 +97,28 @@ func seedTestData() {
 
 	// 创建测试游戏
 	now := time.Now()
-	oneHourLater := now.Add(1 * time.Hour)
-	oneHourAgo := now.Add(-1 * time.Hour)
 	games := []models.Game{
 		{
 			Name:        "周末扑克局",
-			Description: "每周六晚的固定局（已开始）",
+			Description: "每周六晚的固定局",
 			CreatorID:   users[1].ID,
-			Status:      "", // 空字符串表示未结束
-			StartTime:   &oneHourAgo,
+			Status:      "", // 空字符串表示进行中
 			PlayerCount: 12,
 			CreatedAt:   now,
 		},
 		{
 			Name:        "麻将友谊赛",
-			Description: "我创建的游戏（已开始）",
+			Description: "我创建的游戏",
 			CreatorID:   users[0].ID,
 			Status:      "",
-			StartTime:   &oneHourAgo,
 			PlayerCount: 5,
 			CreatedAt:   now,
 		},
 		{
 			Name:        "新手练习场",
-			Description: "1小时后开始（未开始）",
+			Description: "李四创建的局",
 			CreatorID:   users[2].ID,
 			Status:      "",
-			StartTime:   &oneHourLater,
 			PlayerCount: 3,
 			CreatedAt:   now,
 		},

@@ -18,18 +18,12 @@ type GameService struct{}
 
 // CreateGame 创建游戏
 func (s *GameService) CreateGame(creatorID uint, req *dto.CreateGameRequest) (*models.Game, error) {
-	startTime := req.StartTime.ToTimePointer()
-	if startTime == nil {
-		now := time.Now()
-		startTime = &now
-	}
-
+	// 创建即进行中：空字符串表示未结束
 	game := &models.Game{
 		Name:        req.Name,
 		Description: req.Description,
 		CreatorID:   creatorID,
-		Status:      "", // 空字符串表示未结束
-		StartTime:   startTime,
+		Status:      "",
 		PlayerCount: 0,
 	}
 
@@ -47,9 +41,12 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 
 	query := config.DB.Model(&models.Game{})
 
-	// 根据 status 参数决定是否过滤已结束的游戏
-	if status != "ended" {
-		// 默认不显示已结束的游戏，除非明确查询 ended
+	// 状态过滤下推到 SQL，保证 total 与实际返回条数一致
+	if status == models.GameStatusEnded {
+		// 明确查询已结束的游戏
+		query = query.Where("status = ?", gameStatusEnded)
+	} else {
+		// 进行中 / 未指定状态：都不展示已结束的游戏
 		query = query.Where("status != ? OR status IS NULL", gameStatusEnded)
 	}
 
@@ -60,16 +57,9 @@ func (s *GameService) GetGameList(userID uint, status string, page, pageSize int
 		return nil, err
 	}
 
-	// 转换为响应格式，并在内存中进行状态筛选
+	// 转换为响应格式
 	gameResponses := make([]dto.GameResponse, 0, len(games))
 	for _, game := range games {
-		effectiveStatus := game.GetEffectiveStatus()
-
-		// 如果指定了状态筛选，跳过不符合的
-		if status != "" && effectiveStatus != status {
-			continue
-		}
-
 		// 检查用户是否已加入
 		var userGame models.UserGame
 		isJoined := false
@@ -200,11 +190,24 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 	var userGames []models.UserGame
 	var total int64
 
-	query := config.DB.Model(&models.UserGame{}).Where("user_id = ? AND status = 'active'", userID)
+	// 关联 games 表，把状态过滤下推到 SQL，保证 total 与实际返回条数一致
+	query := config.DB.Model(&models.UserGame{}).
+		Joins("JOIN games ON games.id = user_games.game_id").
+		Where("user_games.user_id = ? AND user_games.status = 'active'", userID)
+
+	if status == models.GameStatusEnded {
+		query = query.Where("games.status = ?", gameStatusEnded)
+	} else {
+		query = query.Where("games.status != ? OR games.status IS NULL", gameStatusEnded)
+	}
+
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&userGames).Error; err != nil {
+	if err := query.Select("user_games.*").
+		Order("user_games.created_at DESC").
+		Offset(offset).Limit(pageSize).
+		Find(&userGames).Error; err != nil {
 		return nil, err
 	}
 
@@ -242,28 +245,6 @@ func (s *GameService) GetMyGames(userID uint, status string, page, pageSize int)
 		game, exists := gameMap[ug.GameID]
 		if !exists || game.ID == 0 {
 			continue // 游戏不存在，跳过
-		}
-
-		effectiveStatus := game.GetEffectiveStatus()
-
-		// 根据状态筛选
-		shouldInclude := true
-		switch status {
-		case "ongoing":
-			shouldInclude = effectiveStatus == models.GameStatusOngoing
-		case "ended":
-			shouldInclude = effectiveStatus == models.GameStatusEnded
-		case "recent":
-			// 最近玩过 - 这里简化处理，包含所有游戏
-			shouldInclude = true
-		case "all":
-			fallthrough
-		default:
-			shouldInclude = true
-		}
-
-		if !shouldInclude {
-			continue
 		}
 
 		// 获取用户余额
