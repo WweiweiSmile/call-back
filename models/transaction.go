@@ -6,6 +6,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// 交易类型
+const (
+	TransTypeDeposit  = "deposit"  // 存分
+	TransTypeWithdraw = "withdraw" // 取分
+)
+
+// 操作类型
+const (
+	OperatorTypeSelf  = "self"  // 自主操作
+	OperatorTypeProxy = "proxy" // 代理操作
+)
+
 // Transaction 存取分记录表
 type Transaction struct {
 	ID           uint           `json:"id" gorm:"primaryKey"`

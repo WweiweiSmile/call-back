@@ -36,6 +36,8 @@ func main() {
 		&models.UserGame{},
 		&models.Transaction{},
 		&models.UserBalance{},
+		&models.ScoreRequest{},
+		&models.Message{},
 	); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}

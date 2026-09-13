@@ -5,7 +5,6 @@ import (
 	"call-go/dto"
 	"call-go/models"
 	"errors"
-	"time"
 
 	"gorm.io/gorm"
 )
@@ -32,82 +31,39 @@ func (s *TransactionService) Deposit(operatorID uint, req *dto.DepositRequest) (
 	}
 
 	// 检查权限
-	operatorType := "self"
+	operatorType := models.OperatorTypeSelf
 	if targetUserID != operatorID {
 		// 代理操作，检查是否是游戏创建者
 		if game.CreatorID != operatorID {
 			return nil, errors.New("无权进行代理操作")
 		}
-		operatorType = "proxy"
+		operatorType = models.OperatorTypeProxy
 	}
 
 	// 检查目标用户是否已加入游戏
-	var userGame models.UserGame
-	if err := config.DB.Where("user_id = ? AND game_id = ? AND status = 'active'", targetUserID, req.GameID).First(&userGame).Error; err != nil {
-		return nil, errors.New("目标用户未加入该游戏")
+	if err := ensureActiveParticipant(config.DB, req.GameID, targetUserID); err != nil {
+		return nil, err
+	}
+
+	remark := req.Remark
+	if operatorType == models.OperatorTypeProxy {
+		remark = proxyRemark(config.DB, targetUserID)
 	}
 
 	var transaction *models.Transaction
 	err := config.DB.Transaction(func(tx *gorm.DB) error {
-		// 获取或创建用户余额记录
-		var userBalance models.UserBalance
-		err := tx.Where("user_id = ? AND game_id = ?", targetUserID, req.GameID).First(&userBalance).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				userBalance = models.UserBalance{
-					UserID:         targetUserID,
-					GameID:         req.GameID,
-					TotalDeposit:   0,
-					TotalWithdraw:  0,
-					CurrentBalance: 0,
-					BalanceStatus:  "balanced",
-				}
-				if err := tx.Create(&userBalance).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-
-		// 更新余额
-		userBalance.TotalDeposit += req.Amount
-		userBalance.CurrentBalance += req.Amount
-		now := time.Now()
-		userBalance.LastTransTime = &now
-		userBalance.UpdateBalanceStatus()
-
-		if err := tx.Save(&userBalance).Error; err != nil {
-			return err
-		}
-
-		// 创建交易记录
-		remark := req.Remark
-		if operatorType == "proxy" {
-			var targetUser models.User
-			tx.First(&targetUser, targetUserID)
-			remark = "代理用户：" + targetUser.Nickname
-			if remark == "" {
-				remark = "代理用户：" + targetUser.Username
-			}
-		}
-
-		transaction = &models.Transaction{
+		var err error
+		transaction, err = applyBalanceChange(tx, balanceOpParams{
 			UserID:       targetUserID,
 			GameID:       req.GameID,
+			TransType:    models.TransTypeDeposit,
+			Amount:       req.Amount,
 			OperatorID:   operatorID,
 			OperatorType: operatorType,
-			TransType:    "deposit",
-			Amount:       req.Amount,
-			BalanceAfter: userBalance.CurrentBalance,
 			Remark:       remark,
-		}
-
-		if err := tx.Create(transaction).Error; err != nil {
-			return err
-		}
-
-		return nil
+			AllowCreate:  true,
+		})
+		return err
 	})
 
 	if err != nil {
@@ -137,70 +93,40 @@ func (s *TransactionService) Withdraw(operatorID uint, req *dto.WithdrawRequest)
 	}
 
 	// 检查权限
-	operatorType := "self"
+	operatorType := models.OperatorTypeSelf
 	if targetUserID != operatorID {
 		// 代理操作，检查是否是游戏创建者
 		if game.CreatorID != operatorID {
 			return nil, errors.New("无权进行代理操作")
 		}
-		operatorType = "proxy"
+		operatorType = models.OperatorTypeProxy
 	}
 
 	// 检查目标用户是否已加入游戏
-	var userGame models.UserGame
-	if err := config.DB.Where("user_id = ? AND game_id = ? AND status = 'active'", targetUserID, req.GameID).First(&userGame).Error; err != nil {
-		return nil, errors.New("目标用户未加入该游戏")
+	if err := ensureActiveParticipant(config.DB, req.GameID, targetUserID); err != nil {
+		return nil, err
+	}
+
+	remark := req.Remark
+	if operatorType == models.OperatorTypeProxy {
+		remark = proxyRemark(config.DB, targetUserID)
 	}
 
 	var transaction *models.Transaction
 	err := config.DB.Transaction(func(tx *gorm.DB) error {
-		// 获取用户余额记录
-		var userBalance models.UserBalance
-		if err := tx.Where("user_id = ? AND game_id = ?", targetUserID, req.GameID).First(&userBalance).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.New("用户余额记录不存在")
-			}
-			return err
-		}
-
-		// 更新余额
-		userBalance.TotalWithdraw += req.Amount
-		userBalance.CurrentBalance -= req.Amount
-		now := time.Now()
-		userBalance.LastTransTime = &now
-		userBalance.UpdateBalanceStatus()
-
-		if err := tx.Save(&userBalance).Error; err != nil {
-			return err
-		}
-
-		// 创建交易记录
-		remark := req.Remark
-		if operatorType == "proxy" {
-			var targetUser models.User
-			tx.First(&targetUser, targetUserID)
-			remark = "代理用户：" + targetUser.Nickname
-			if remark == "" {
-				remark = "代理用户：" + targetUser.Username
-			}
-		}
-
-		transaction = &models.Transaction{
+		var err error
+		// 取分沿用既有行为：余额记录不存在直接报错，且不做余额充足性校验
+		transaction, err = applyBalanceChange(tx, balanceOpParams{
 			UserID:       targetUserID,
 			GameID:       req.GameID,
+			TransType:    models.TransTypeWithdraw,
+			Amount:       req.Amount,
 			OperatorID:   operatorID,
 			OperatorType: operatorType,
-			TransType:    "withdraw",
-			Amount:       req.Amount,
-			BalanceAfter: userBalance.CurrentBalance,
 			Remark:       remark,
-		}
-
-		if err := tx.Create(transaction).Error; err != nil {
-			return err
-		}
-
-		return nil
+			AllowCreate:  false,
+		})
+		return err
 	})
 
 	if err != nil {
