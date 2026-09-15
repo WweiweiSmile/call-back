@@ -71,6 +71,29 @@ func TestValidateReviewHand_RejectsBadInput(t *testing.T) {
 		{"底牌与公共牌重复", func(h *models.ReviewHand) { h.Board = "As7h2d" }},
 		{"公共牌自身重复", func(h *models.ReviewHand) { h.Board = "QsQs2d" }},
 		{"非法位置", func(h *models.ReviewHand) { h.HeroPosition = "MP1" }},
+		// MP 已被 LJ/HJ 取代：它能同时读成两个位置，交给模型就是歧义
+		{"MP 已废弃", func(h *models.ReviewHand) { h.HeroPosition = "MP" }},
+		{"人数只有 1 人", func(h *models.ReviewHand) { h.TableSize = 1 }},
+		{"人数超过 9 人", func(h *models.ReviewHand) { h.TableSize = 10 }},
+		{"人数为负", func(h *models.ReviewHand) { h.TableSize = -1 }},
+		// 位置必须落在该人数的位置上，否则 UI 选了 6 人桌却存进 LJ 这种自相矛盾的数据
+		{"6 人桌用 7 人桌才有的 LJ", func(h *models.ReviewHand) {
+			h.TableSize = 6
+			h.HeroPosition = models.PositionLJ
+		}},
+		{"7 人桌用 8 人桌才有的 UTG+1", func(h *models.ReviewHand) {
+			h.TableSize = 7
+			h.HeroPosition = models.PositionUTG1
+		}},
+		{"2 人桌用 BTN（应记为 SB）", func(h *models.ReviewHand) {
+			h.TableSize = 2
+			h.HeroPosition = models.PositionBTN
+		}},
+		{"对手位置不属于该人数", func(h *models.ReviewHand) {
+			h.TableSize = 6
+			h.HeroPosition = models.PositionBTN
+			h.Villains = []models.VillainInfo{{Position: models.PositionUTG2, IsKey: true}}
+		}},
 		{"非法结果", func(h *models.ReviewHand) { h.Result = "draw" }},
 		{"负筹码", func(h *models.ReviewHand) { h.HeroStackBB = -1 }},
 		{"非法街道", func(h *models.ReviewHand) { h.Streets[0].Street = "flopp" }},
@@ -175,6 +198,92 @@ func TestComputeHandHash(t *testing.T) {
 	h5.Streets[1].Actions[1].AmountBB = bb(6)
 	if ComputeHandHash(h1) == ComputeHandHash(h5) {
 		t.Error("下注尺度变化必须改变哈希")
+	}
+
+	// 人数会写进提示词，同一个位置在不同人数下含义不同，必须换哈希
+	h6 := validHand()
+	h6.TableSize = 6
+	h6.HeroPosition = models.PositionHJ
+	if ComputeHandHash(h1) == ComputeHandHash(h6) {
+		t.Error("人数变化必须改变哈希")
+	}
+}
+
+func TestValidateReviewHand_TableSize(t *testing.T) {
+	// 人数留空按满员桌处理，前端默认值也是 9，两边要一致
+	h := validHand()
+	h.TableSize = 0
+	if err := ValidateReviewHand(h); err != nil {
+		t.Fatalf("人数留空应校验通过，实际: %v", err)
+	}
+	if h.TableSize != models.DefaultTableSize {
+		t.Errorf("人数留空应归一化为 %d，实际 %d", models.DefaultTableSize, h.TableSize)
+	}
+
+	// 6 人桌的合法位置
+	for _, pos := range []string{
+		models.PositionSB, models.PositionBB, models.PositionUTG,
+		models.PositionHJ, models.PositionCO, models.PositionBTN,
+	} {
+		h := validHand()
+		h.TableSize = 6
+		h.HeroPosition = pos
+		if err := ValidateReviewHand(h); err != nil {
+			t.Errorf("6 人桌的 %s 应合法，实际: %v", pos, err)
+		}
+	}
+
+	// 对手只记数量不记位置是合法状态，不能被位置校验误伤
+	h2 := validHand()
+	h2.Villains = []models.VillainInfo{{StackBB: bb(100), IsKey: true}}
+	if err := ValidateReviewHand(h2); err != nil {
+		t.Fatalf("对手位置为空应放行，实际: %v", err)
+	}
+}
+
+func TestPositionsForTableSize(t *testing.T) {
+	// 这张表是前后端共用的契约（前端 src/utils/poker.ts 的 positionsForTableSize），
+	// 人数与位置的对应关系写错会直接导致录入页选不出正确位置
+	want := map[int][]string{
+		9: {models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionUTG1,
+			models.PositionUTG2, models.PositionLJ, models.PositionHJ, models.PositionCO,
+			models.PositionBTN},
+		8: {models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionUTG1,
+			models.PositionLJ, models.PositionHJ, models.PositionCO, models.PositionBTN},
+		7: {models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionLJ,
+			models.PositionHJ, models.PositionCO, models.PositionBTN},
+		6: {models.PositionSB, models.PositionBB, models.PositionUTG,
+			models.PositionHJ, models.PositionCO, models.PositionBTN},
+		5: {models.PositionSB, models.PositionBB, models.PositionUTG,
+			models.PositionCO, models.PositionBTN},
+		4: {models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionBTN},
+		3: {models.PositionSB, models.PositionBB, models.PositionBTN},
+		2: {models.PositionSB, models.PositionBB},
+	}
+
+	for size := models.MinTableSize; size <= models.MaxTableSize; size++ {
+		got := PositionsForTableSize(size)
+		expected, ok := want[size]
+		if !ok {
+			t.Fatalf("%d 人桌缺少期望值", size)
+		}
+		if len(got) != size {
+			t.Errorf("%d 人桌应有 %d 个位置，实际 %d 个：%v", size, size, len(got), got)
+		}
+		if len(got) != len(expected) {
+			t.Errorf("%d 人桌位置数量应为 %d，实际 %d", size, len(expected), len(got))
+			continue
+		}
+		for i := range expected {
+			if got[i] != expected[i] {
+				t.Errorf("%d 人桌第 %d 个位置应为 %s，实际 %s（顺序也要一致）", size, i, expected[i], got[i])
+			}
+		}
+	}
+
+	// 越界人数没有合法位置，调用方据此报错
+	if PositionsForTableSize(1) != nil || PositionsForTableSize(10) != nil {
+		t.Error("越界人数应返回 nil")
 	}
 }
 

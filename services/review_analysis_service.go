@@ -18,12 +18,14 @@ import (
 type ReviewAnalysisService struct {
 	reviewService *ReviewService
 	aiClient      *AIClient
+	memoryService *ReviewMemoryService
 }
 
 func NewReviewAnalysisService() *ReviewAnalysisService {
 	return &ReviewAnalysisService{
 		reviewService: &ReviewService{},
 		aiClient:      NewAIClient(),
+		memoryService: NewReviewMemoryService(),
 	}
 }
 
@@ -154,8 +156,10 @@ func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, han
 		return
 	}
 
-	// M3 还没有长期记忆，传 nil；M4 接入画像后在这里填充
-	system, user := BuildAnalysisPrompt(hand, tags, nil)
+	// 注入该用户的长期记忆。取不到时 BuildMemoryContext 返回 nil，
+	// BuildMemoryBlock 退化成空串，这次就按"没有记忆"跑，不影响主流程
+	memory := s.memoryService.BuildMemoryContext(hand.UserID)
+	system, user := BuildAnalysisPrompt(hand, tags, memory)
 
 	result, err := s.aiClient.CompleteJSON(ctx, system, user)
 	if err != nil {
@@ -198,6 +202,29 @@ func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, han
 
 	log.Printf("[分析 %d] 完成，耗时 %dms，tokens %d/%d",
 		analysisID, nowMs, result.TokensIn, result.TokensOut)
+
+	s.recordMemory(analysis, hand)
+}
+
+// recordMemory 把本次分析的产出并入长期记忆。
+//
+// 全程只记日志不返回错误：分析结果本身已经落库了，记忆是增量收益，
+// 不该因为它出问题就把这手牌标成失败、让用户白花一次额度
+func (s *ReviewAnalysisService) recordMemory(analysis *models.ReviewAnalysis, hand *models.ReviewHand) {
+	if err := s.memoryService.RecordInsights(
+		hand.UserID, hand.ID, analysis.ID, analysis.Result,
+	); err != nil {
+		log.Printf("[记忆] 写入洞察失败 analysis=%d: %v", analysis.ID, err)
+		return
+	}
+
+	// 统计是纯计算，每次都刷；summary 的重写由 MaybeRewriteSummary 按阈值把关
+	if _, err := s.memoryService.RefreshProfile(hand.UserID); err != nil {
+		log.Printf("[记忆] 刷新画像失败 user=%d: %v", hand.UserID, err)
+		return
+	}
+
+	s.memoryService.MaybeRewriteSummary(hand.UserID)
 }
 
 func (s *ReviewAnalysisService) failAnalysis(analysisID, handID uint, msg string, elapsed time.Duration) {

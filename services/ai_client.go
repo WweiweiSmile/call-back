@@ -82,6 +82,25 @@ type chatResponse struct {
 // 请求里带 response_format=json_object，配合提示词中给出的 Schema，
 // 能大幅降低"返回一段带 markdown 围栏的散文"这类解析失败。
 func (c *AIClient) CompleteJSON(ctx context.Context, system, user string) (*CompletionResult, error) {
+	return c.complete(ctx, system, user, true, 3000)
+}
+
+// Complete 普通文本补全。
+//
+// 画像总结这类输出是一段给人读的中文，套 JSON 反而要多一层解析，
+// 而且 response_format=json_object 会让模型倾向于写成字段化的短句，
+// 读起来不像人话。maxTokens 由调用方给：总结限 500 字，不需要 3000 的额度。
+func (c *AIClient) Complete(ctx context.Context, system, user string, maxTokens int) (*CompletionResult, error) {
+	return c.complete(ctx, system, user, false, maxTokens)
+}
+
+// complete 发起一次对话补全，JSON 模式与普通模式共用这套重试与错误处理
+func (c *AIClient) complete(
+	ctx context.Context,
+	system, user string,
+	jsonMode bool,
+	maxTokens int,
+) (*CompletionResult, error) {
 	settings := config.AIConfig()
 	if !settings.Enabled || settings.APIKey == "" {
 		return nil, fmt.Errorf("服务端未配置 AI API Key，AI 分析不可用")
@@ -94,10 +113,12 @@ func (c *AIClient) CompleteJSON(ctx context.Context, system, user string) (*Comp
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		ResponseFormat: &respFormat{Type: "json_object"},
 		// 扑克分析要的是稳定可复现，不是创意。低温度能减少同一手牌两次分析结论差异过大
 		Temperature: 0.3,
-		MaxTokens:   3000,
+		MaxTokens:   maxTokens,
+	}
+	if jsonMode {
+		payload.ResponseFormat = &respFormat{Type: "json_object"}
 	}
 
 	body, err := json.Marshal(payload)

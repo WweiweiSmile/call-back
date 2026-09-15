@@ -12,6 +12,7 @@ import (
 type ReviewHandRequest struct {
 	GameID       *uint                 `json:"gameId"`
 	Title        string                `json:"title"`
+	TableSize    int                   `json:"tableSize"`
 	HeroPosition string                `json:"heroPosition" binding:"required"`
 	HeroCards    string                `json:"heroCards" binding:"required"`
 	HeroStackBB  float64               `json:"heroStackBb"`
@@ -33,6 +34,7 @@ type ReviewHandResponse struct {
 	GameID        *uint                 `json:"gameId,omitempty"`
 	GameName      string                `json:"gameName,omitempty"`
 	Title         string                `json:"title"`
+	TableSize     int                   `json:"tableSize"`
 	HeroPosition  string                `json:"heroPosition"`
 	HeroCards     string                `json:"heroCards"`
 	HeroStackBB   float64               `json:"heroStackBb"`
@@ -93,6 +95,7 @@ func ToReviewHandResponse(hand *models.ReviewHand, gameName string) ReviewHandRe
 		GameID:        hand.GameID,
 		GameName:      gameName,
 		Title:         hand.Title,
+		TableSize:     hand.TableSize,
 		HeroPosition:  hand.HeroPosition,
 		HeroCards:     hand.HeroCards,
 		HeroStackBB:   hand.HeroStackBB,

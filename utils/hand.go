@@ -15,13 +15,53 @@ const (
 	validSuits = "shdc"
 )
 
-var validPositions = map[string]bool{
-	models.PositionUTG: true,
-	models.PositionMP:  true,
-	models.PositionCO:  true,
-	models.PositionBTN: true,
-	models.PositionSB:  true,
-	models.PositionBB:  true,
+// positionsByTableSize 各人数下的合法位置，按翻前行动顺序（SB 先说话，BTN 最后）。
+//
+// 这份表和前端 src/utils/poker.ts 的 positionsForTableSize 是同一份契约，改动要两边同步。
+// 规律：9 人桌去掉 UTG+2 就是 8 人，再去掉 UTG+1 就是 7 人，以此类推；
+// 2 人桌的 SB 同时兼任 BTN（单挑时按钮位下小盲）。
+var positionsByTableSize = map[int][]string{
+	9: {
+		models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionUTG1,
+		models.PositionUTG2, models.PositionLJ, models.PositionHJ, models.PositionCO,
+		models.PositionBTN,
+	},
+	8: {
+		models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionUTG1,
+		models.PositionLJ, models.PositionHJ, models.PositionCO, models.PositionBTN,
+	},
+	7: {
+		models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionLJ,
+		models.PositionHJ, models.PositionCO, models.PositionBTN,
+	},
+	6: {
+		models.PositionSB, models.PositionBB, models.PositionUTG,
+		models.PositionHJ, models.PositionCO, models.PositionBTN,
+	},
+	5: {
+		models.PositionSB, models.PositionBB, models.PositionUTG,
+		models.PositionCO, models.PositionBTN,
+	},
+	4: {
+		models.PositionSB, models.PositionBB, models.PositionUTG, models.PositionBTN,
+	},
+	3: {models.PositionSB, models.PositionBB, models.PositionBTN},
+	2: {models.PositionSB, models.PositionBB},
+}
+
+// PositionsForTableSize 返回该人数下的合法位置；人数越界时返回 nil
+func PositionsForTableSize(tableSize int) []string {
+	return positionsByTableSize[tableSize]
+}
+
+// isValidPosition 位置是否属于该人数下的合法集合
+func isValidPosition(position string, tableSize int) bool {
+	for _, p := range positionsByTableSize[tableSize] {
+		if p == position {
+			return true
+		}
+	}
+	return false
 }
 
 var validActions = map[string]bool{
@@ -161,10 +201,33 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 		seen[card] = true
 	}
 
-	// --- 位置 / 枚举字段 ---
+	// --- 人数 / 位置 ---
+	// 人数先归一化：0 表示没填，按满员桌处理（前端默认值也是 9）。
+	// 位置的含义完全取决于人数——同样是 UTG，6 人桌和 9 人桌面对的范围
+	// 差别很大——所以两者必须一起校验，不能各管各的。
+	if h.TableSize == 0 {
+		h.TableSize = models.DefaultTableSize
+	}
+	if h.TableSize < models.MinTableSize || h.TableSize > models.MaxTableSize {
+		return fmt.Errorf("人数只能是 %d~%d 人，当前为 %d", models.MinTableSize, models.MaxTableSize, h.TableSize)
+	}
+
 	h.HeroPosition = strings.ToUpper(strings.TrimSpace(h.HeroPosition))
-	if !validPositions[h.HeroPosition] {
-		return fmt.Errorf("无效的位置：%s", h.HeroPosition)
+	if !isValidPosition(h.HeroPosition, h.TableSize) {
+		return fmt.Errorf("无效的位置：%s（%d 人桌可选 %s）",
+			h.HeroPosition, h.TableSize, strings.Join(PositionsForTableSize(h.TableSize), "/"))
+	}
+
+	// 对手位置跟手牌共用同一套词表。空位置放行：v1 允许只记对手数量不记位置
+	for i := range h.Villains {
+		h.Villains[i].Position = strings.ToUpper(strings.TrimSpace(h.Villains[i].Position))
+		if h.Villains[i].Position == "" {
+			continue
+		}
+		if !isValidPosition(h.Villains[i].Position, h.TableSize) {
+			return fmt.Errorf("对手位置无效：%s（%d 人桌可选 %s）",
+				h.Villains[i].Position, h.TableSize, strings.Join(PositionsForTableSize(h.TableSize), "/"))
+		}
 	}
 
 	if h.Result == "" {
@@ -279,6 +342,7 @@ func streetNameForCount(cards int) string {
 // 否则用户重命名一手牌就得重新花一次模型调用。
 func ComputeHandHash(h *models.ReviewHand) string {
 	payload := struct {
+		TableSize    int                   `json:"tableSize"`
 		HeroPosition string                `json:"heroPosition"`
 		HeroCards    string                `json:"heroCards"`
 		HeroStackBB  float64               `json:"heroStackBb"`
@@ -293,6 +357,7 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		ResultAmount *float64              `json:"resultAmount"`
 		HeroTags     []string              `json:"heroTags"`
 	}{
+		TableSize:    h.TableSize,
 		HeroPosition: h.HeroPosition,
 		HeroCards:    h.HeroCards,
 		HeroStackBB:  h.HeroStackBB,

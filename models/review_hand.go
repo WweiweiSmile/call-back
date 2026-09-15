@@ -31,14 +31,28 @@ const (
 	ActorOther   = "other"
 )
 
-// 位置
+// 位置。取值随人数（TableSize）变化，合法组合见 utils.PositionsForTableSize。
+//
+// 原有的 MP 已废弃：它既可能指 LJ 也可能指 HJ，两种读法对应的翻前范围差别很大，
+// 交给模型分析时是实打实的歧义。存量数据已迁移到 HJ。
 const (
-	PositionUTG = "UTG"
-	PositionMP  = "MP"
-	PositionCO  = "CO"
-	PositionBTN = "BTN"
-	PositionSB  = "SB"
-	PositionBB  = "BB"
+	PositionSB   = "SB"
+	PositionBB   = "BB"
+	PositionUTG  = "UTG"
+	PositionUTG1 = "UTG+1"
+	PositionUTG2 = "UTG+2"
+	PositionLJ   = "LJ"
+	PositionHJ   = "HJ"
+	PositionCO   = "CO"
+	PositionBTN  = "BTN"
+)
+
+// 人数取值范围
+const (
+	MinTableSize = 2
+	MaxTableSize = 9
+	// DefaultTableSize 未填写时按满员桌处理
+	DefaultTableSize = 9
 )
 
 // 底池类型
@@ -94,7 +108,8 @@ type ReviewHand struct {
 	UserID       uint    `json:"userId" gorm:"not null;index:idx_rh_user_created,priority:1;comment:记录者ID，数据隔离依据"`
 	GameID       *uint   `json:"gameId" gorm:"index;comment:关联场次ID，可为空（支持独立复盘）"`
 	Title        string  `json:"title" gorm:"size:255;comment:标题，为空时前端按位置+底牌自动生成"`
-	HeroPosition string  `json:"heroPosition" gorm:"size:10;comment:我的位置: UTG/MP/CO/BTN/SB/BB"`
+	TableSize    int     `json:"tableSize" gorm:"not null;default:9;comment:几人桌(2-9)，默认9。决定 HeroPosition 的合法取值"`
+	HeroPosition string  `json:"heroPosition" gorm:"size:10;comment:我的位置，取值随 table_size 变化，如 UTG+2/LJ/HJ"`
 	HeroCards    string  `json:"heroCards" gorm:"size:8;comment:我的底牌，规范格式如 AsKh"`
 	HeroStackBB  float64 `json:"heroStackBb" gorm:"comment:我的有效筹码(BB)"`
 	Stakes       string  `json:"stakes" gorm:"size:20;comment:盲注级别，如 5/10"`

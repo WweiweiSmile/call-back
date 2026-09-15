@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS review_hands (
     user_id BIGINT UNSIGNED NOT NULL COMMENT '记录者ID，数据隔离依据',
     game_id BIGINT UNSIGNED NULL COMMENT '关联场次ID，可为空',
     title VARCHAR(255) COMMENT '标题，为空时后端按位置+底牌生成',
-    hero_position VARCHAR(10) COMMENT '我的位置: UTG/MP/CO/BTN/SB/BB',
+    table_size INT NOT NULL DEFAULT 9 COMMENT '几人桌(2-9)，默认9。决定 hero_position 的合法取值',
+    hero_position VARCHAR(10) COMMENT '我的位置，取值随 table_size 变化，如 UTG+2/LJ/HJ',
     hero_cards VARCHAR(8) COMMENT '我的底牌，规范格式如 AsKh',
     hero_stack_bb DOUBLE DEFAULT 0 COMMENT '我的有效筹码(BB)',
     stakes VARCHAR(20) COMMENT '盲注级别，如 5/10',
@@ -140,6 +141,61 @@ CREATE TABLE IF NOT EXISTS review_leak_tags (
     UNIQUE INDEX idx_code (code),
     INDEX idx_category (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复盘漏洞标签字典表';
+
+-- 复盘洞察表（长期记忆的原子）
+-- 每次分析后把 AI 输出的每条 leaks/strengths 落一行。
+-- evidence 必填且引用本手牌：它是防止"AI 随口贴标签"的唯一抓手，
+-- 也是画像页"点击漏洞 → 看历史上哪几手牌犯的"的数据来源
+CREATE TABLE IF NOT EXISTS review_insights (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '归属用户，数据隔离依据',
+    hand_id BIGINT UNSIGNED NOT NULL COMMENT '证据来自哪手牌',
+    analysis_id BIGINT UNSIGNED NOT NULL COMMENT '来自哪次分析',
+    kind VARCHAR(20) NOT NULL COMMENT 'leak/strength',
+    tag_code VARCHAR(64) COMMENT '关联 review_leak_tags.code，strength 为空',
+    severity INT COMMENT '1~3，strength 恒为 0',
+    evidence TEXT NOT NULL COMMENT '引用本手牌的一句话依据',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ri_user_id_id (user_id, id),
+    INDEX idx_insight_hand_id (hand_id),
+    INDEX idx_insight_analysis_id (analysis_id),
+    INDEX idx_insight_kind (kind),
+    INDEX idx_insight_tag_code (tag_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复盘洞察表（长期记忆原子）';
+
+-- 用户复盘画像表（长期记忆的载体）
+-- 每用户一条，滚动更新；每次分析时注入提示词的内容来源。
+-- summary 由 AI 增量重写而非每手重写：既省钱，也避免总结随最后一手牌剧烈摆动
+CREATE TABLE IF NOT EXISTS review_profiles (
+    user_id BIGINT UNSIGNED PRIMARY KEY COMMENT '一个用户一条',
+    hands_reviewed INT DEFAULT 0 COMMENT '已分析的手牌数',
+    leaks JSON COMMENT '漏洞排行 [{tagCode,name,count,lastSeenAt,avgSeverity,topEvidence}]',
+    strengths JSON COMMENT '最近的优点 [{text,handId,date}]',
+    summary TEXT COMMENT 'AI 增量重写的阶段总结，≤500 字',
+    summary_version INT DEFAULT 0 COMMENT '总结版本号，每次重写 +1',
+    last_summary_at DATETIME NULL COMMENT '上次重写总结的时间',
+    last_summary_insight_id BIGINT UNSIGNED DEFAULT 0 COMMENT '上次重写时纳入的最大洞察ID（水位线）',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户复盘画像表';
+
+-- 复盘追问对话表（M5）
+-- 每条消息记住基于哪次分析：手牌改过并重新分析后，旧对话仍对应旧结论，不会张冠李戴。
+-- user_id 是数据隔离依据 —— 对话同样属于用户私有数据
+CREATE TABLE IF NOT EXISTS review_messages (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '归属用户，数据隔离依据',
+    hand_id BIGINT UNSIGNED NOT NULL COMMENT '属于哪手牌',
+    analysis_id BIGINT UNSIGNED NOT NULL COMMENT '基于哪次分析追问',
+    role VARCHAR(20) NOT NULL COMMENT 'user/assistant',
+    content TEXT NOT NULL COMMENT '消息正文',
+    tokens_in INT DEFAULT 0 COMMENT '仅 assistant 消息，用于成本记账',
+    tokens_out INT DEFAULT 0 COMMENT '仅 assistant 消息',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_rm_hand_id_id (hand_id, id),
+    INDEX idx_message_user_id (user_id),
+    INDEX idx_message_analysis_id (analysis_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复盘追问对话表';
 
 -- 插入测试用户
 INSERT INTO users (username, nickname, status) VALUES 

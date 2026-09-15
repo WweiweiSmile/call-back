@@ -93,6 +93,15 @@ func SetupRoutes(r *gin.Engine) {
 				// 因为它们的第一段就不同（leak-tags / ai-status vs hands）
 				reviews.GET("/leak-tags", reviewController.GetLeakTags) // 漏洞标签字典
 				reviews.GET("/ai-status", reviewController.GetAIStatus) // AI 可用状态与剩余额度
+
+				// 长期记忆（M4）：画像与漏洞钻取
+				reviews.GET("/profile", reviewController.GetProfile)                             // 我的复盘画像
+				reviews.POST("/profile/summary/refresh", reviewController.RefreshProfileSummary) // 手动重写总结
+				reviews.GET("/insights", reviewController.GetInsights)                           // 某漏洞的历史证据
+
+				// 追问对话（M5）
+				reviews.POST("/hands/:id/messages", reviewController.AskQuestion) // 追问，同步返回回复
+				reviews.GET("/hands/:id/messages", reviewController.GetMessages)  // 对话历史
 			}
 		}
 	}

@@ -45,6 +45,7 @@ func TestReviewHandColumnNames(t *testing.T) {
 	expectedColumns := map[string]string{
 		"UserID":        "user_id",
 		"GameID":        "game_id",
+		"TableSize":     "table_size",
 		"HeroPosition":  "hero_position",
 		"HeroTags":      "hero_tags",
 		"AnalyzeStatus": "analyze_status",

@@ -258,6 +258,7 @@ func (s *ReviewService) checkGameAccessible(userID uint, gameID *uint) error {
 func applyHandRequest(hand *models.ReviewHand, req *dto.ReviewHandRequest) {
 	hand.GameID = req.GameID
 	hand.Title = strings.TrimSpace(req.Title)
+	hand.TableSize = req.TableSize
 	hand.HeroPosition = req.HeroPosition
 	hand.HeroCards = req.HeroCards
 	hand.HeroStackBB = req.HeroStackBB
