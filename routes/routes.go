@@ -14,6 +14,7 @@ func SetupRoutes(r *gin.Engine) {
 	transactionController := controllers.NewTransactionController()
 	scoreRequestController := controllers.NewScoreRequestController()
 	messageController := controllers.NewMessageController()
+	reviewController := controllers.NewReviewController()
 
 	// API 路由组
 	api := r.Group("/api/v1")
@@ -72,6 +73,26 @@ func SetupRoutes(r *gin.Engine) {
 				messages.GET("/unread-count", messageController.GetUnreadCount) // 未读数
 				messages.POST("/read-all", messageController.MarkAllRead)       // 全部已读
 				messages.POST("/:id/read", messageController.MarkRead)          // 单条已读
+			}
+
+			// 复盘（手牌记录 + AI 分析 + 长期记忆）
+			// 手牌对每个用户私有，所有接口都按当前用户过滤
+			reviews := authorized.Group("/reviews")
+			{
+				reviews.POST("/hands", reviewController.CreateHand)       // 创建手牌
+				reviews.GET("/hands", reviewController.GetHandList)       // 手牌列表
+				reviews.GET("/hands/:id", reviewController.GetHand)       // 手牌详情
+				reviews.PUT("/hands/:id", reviewController.UpdateHand)    // 更新手牌（整体替换）
+				reviews.DELETE("/hands/:id", reviewController.DeleteHand) // 删除手牌
+
+				reviews.POST("/hands/:id/analyze", reviewController.AnalyzeHand)     // 触发 AI 分析（异步）
+				reviews.GET("/hands/:id/analyses", reviewController.GetHandAnalyses) // 该手牌的历史分析
+				reviews.GET("/analyses/:id", reviewController.GetAnalysis)           // 轮询分析状态与结果
+
+				// 静态路径放在 /hands/:id 之类的通配路径之后不影响匹配，
+				// 因为它们的第一段就不同（leak-tags / ai-status vs hands）
+				reviews.GET("/leak-tags", reviewController.GetLeakTags) // 漏洞标签字典
+				reviews.GET("/ai-status", reviewController.GetAIStatus) // AI 可用状态与剩余额度
 			}
 		}
 	}

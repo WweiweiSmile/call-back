@@ -1,0 +1,130 @@
+package models
+
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// 街道
+const (
+	StreetPreflop = "preflop"
+	StreetFlop    = "flop"
+	StreetTurn    = "turn"
+	StreetRiver   = "river"
+)
+
+// 行动类型
+const (
+	ActionFold  = "fold"
+	ActionCheck = "check"
+	ActionCall  = "call"
+	ActionBet   = "bet"
+	ActionRaise = "raise"
+	ActionAllin = "allin"
+)
+
+// 行动者。other 表示不关注的其他玩家，聚合成一个角色即可
+const (
+	ActorHero    = "hero"
+	ActorVillain = "villain"
+	ActorOther   = "other"
+)
+
+// 位置
+const (
+	PositionUTG = "UTG"
+	PositionMP  = "MP"
+	PositionCO  = "CO"
+	PositionBTN = "BTN"
+	PositionSB  = "SB"
+	PositionBB  = "BB"
+)
+
+// 底池类型
+const (
+	PotTypeHU    = "hu"    // 单挑
+	PotTypeMulti = "multi" // 多人池
+)
+
+// 结果
+const (
+	ResultWin     = "win"
+	ResultLose    = "lose"
+	ResultFold    = "fold"
+	ResultUnknown = "unknown"
+)
+
+// 分析状态。M1/M2 不使用，预留给 M3 的 AI 分析
+const (
+	AnalyzeStatusNone    = "none"
+	AnalyzeStatusPending = "pending"
+	AnalyzeStatusDone    = "done"
+	AnalyzeStatusFailed  = "failed"
+)
+
+// StreetAction 一条行动记录
+type StreetAction struct {
+	Actor    string   `json:"actor"`              // hero / villain / other
+	Action   string   `json:"action"`             // fold / check / call / bet / raise / allin
+	AmountBB *float64 `json:"amountBb,omitempty"` // bet/raise 的金额（BB）；raise 记录"加到多少"
+}
+
+// StreetRecord 一条街的完整行动序列
+type StreetRecord struct {
+	Street     string         `json:"street"`               // preflop / flop / turn / river
+	Actions    []StreetAction `json:"actions"`              // 按发生顺序
+	PotStartBB *float64       `json:"potStartBb,omitempty"` // 该街开始时的底池
+}
+
+// VillainInfo 对手信息。v1 只要求标出关键对手
+type VillainInfo struct {
+	Position string   `json:"position"`
+	StackBB  *float64 `json:"stackBb,omitempty"`
+	IsKey    bool     `json:"isKey,omitempty"` // 是否为关键对手
+}
+
+// ReviewHand 复盘手牌表
+//
+// 这是复盘功能的聚合根：一手牌永远整手读写，不存在"只查某条 action"的场景，
+// 所以 Streets / Villains / HeroTags 用 JSON 列存，避免拆表后每次都要 join 组装。
+// 需要检索的维度（位置、场次、时间）已经冗余成独立列。
+type ReviewHand struct {
+	ID           uint    `json:"id" gorm:"primaryKey"`
+	UserID       uint    `json:"userId" gorm:"not null;index:idx_rh_user_created,priority:1;comment:记录者ID，数据隔离依据"`
+	GameID       *uint   `json:"gameId" gorm:"index;comment:关联场次ID，可为空（支持独立复盘）"`
+	Title        string  `json:"title" gorm:"size:255;comment:标题，为空时前端按位置+底牌自动生成"`
+	HeroPosition string  `json:"heroPosition" gorm:"size:10;comment:我的位置: UTG/MP/CO/BTN/SB/BB"`
+	HeroCards    string  `json:"heroCards" gorm:"size:8;comment:我的底牌，规范格式如 AsKh"`
+	HeroStackBB  float64 `json:"heroStackBb" gorm:"comment:我的有效筹码(BB)"`
+	Stakes       string  `json:"stakes" gorm:"size:20;comment:盲注级别，如 5/10"`
+	Board        string  `json:"board" gorm:"size:10;comment:公共牌，按发牌顺序拼接如 Qs7h2d3c9s"`
+	VillainCount int     `json:"villainCount" gorm:"comment:对手数量"`
+
+	Villains []VillainInfo `json:"villains" gorm:"serializer:json;type:json;comment:对手信息"`
+
+	PotType string `json:"potType" gorm:"size:10;default:'hu';comment:hu-单挑, multi-多人池"`
+
+	Streets []StreetRecord `json:"streets" gorm:"serializer:json;type:json;comment:按街的行动序列"`
+
+	HeroThought  string   `json:"heroThought" gorm:"type:text;comment:我当时是怎么想的"`
+	Result       string   `json:"result" gorm:"size:10;default:'unknown';comment:win/lose/fold/unknown"`
+	ResultAmount *float64 `json:"resultAmount" gorm:"comment:输赢金额(BB)"`
+
+	HeroTags []string `json:"heroTags" gorm:"serializer:json;type:json;comment:用户自打标签"`
+
+	// ContentHash 手牌内容指纹。内容未变更时不必重复调用 AI 分析，直接复用上次结果
+	ContentHash string `json:"-" gorm:"size:64;comment:内容指纹，用于判断是否需要重新分析"`
+
+	// AnalyzeStatus 冗余字段，列表页直接展示，避免为了一个状态去 join 分析表
+	AnalyzeStatus string `json:"analyzeStatus" gorm:"size:20;default:'none';comment:none/pending/done/failed"`
+
+	CreatedAt time.Time      `json:"createdAt" gorm:"index:idx_rh_user_created,priority:2"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+// TableName 指定表名
+func (ReviewHand) TableName() string {
+	return "review_hands"
+}

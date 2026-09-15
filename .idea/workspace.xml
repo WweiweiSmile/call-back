@@ -4,12 +4,29 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 移除startTime（开始时间)字段，创建即开始，手动结束即结束">
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="feat：页面添加存取分的功能">
+      <change afterPath="$PROJECT_DIR$/config/ai.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/controllers/review_controller.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dto/review.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dto/review_analysis.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/review_analysis.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/review_analysis_test.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/review_hand.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/review_hand_schema_test.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/review_leak_tag.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/services/ai_client.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/services/prompt_builder.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/services/review_analysis_service.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/services/review_service.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils/hand.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils/hand_test.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/utils/pot.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/database/init.sql" beforeDir="false" afterPath="$PROJECT_DIR$/database/init.sql" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/transaction.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/transaction.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/routes/routes.go" beforeDir="false" afterPath="$PROJECT_DIR$/routes/routes.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/transaction_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/transaction_service.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -19,7 +36,7 @@
   <component name="EmbeddingIndexingInfo">
     <option name="cachedIndexableFilesCount" value="27" />
   </component>
-  <component name="GOROOT" url="file://$USER_HOME$/sdk/go1.25.4" />
+  <component name="GOROOT" url="file:///opt/homebrew/opt/go/libexec" />
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
@@ -36,31 +53,42 @@
     <option name="showLibraryContents" value="true" />
     <option name="showMembers" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.GoLinterPluginOnboardingV2&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.GoLinterPluginStorageMigration&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.analysis.ui.options.defaults&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.modules.go.list.on.any.changes.was.set&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;go.sdk.automatically.set&quot;: &quot;true&quot;,
-    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/weiweigod/codes/call-back&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.GoLinterPluginOnboardingV2": "true",
+    "RunOnceActivity.GoLinterPluginStorageMigration": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.analysis.ui.options.defaults": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
+    "git-widget-placeholder": "master",
+    "go.sdk.automatically.set": "true",
+    "junie.onboarding.icon.badge.shown": "true",
+    "last_opened_file_path": "/Users/weiweigod/codes/call-back",
+    "node.js.detected.package.eslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "go.vgo",
+    "to.speed.mode.migration.done": "true"
   }
-}</component>
+}]]></component>
+  <component name="RunManager">
+    <configuration name="go build call-back/" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="call-go" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="DIRECTORY" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$" />
+      <method v="2" />
+    </configuration>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -95,6 +123,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="refactor: 移除startTime（开始时间)字段，创建即开始，手动结束即结束" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: 移除startTime（开始时间)字段，创建即开始，手动结束即结束" />
+    <MESSAGE value="feat：页面添加存取分的功能" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat：页面添加存取分的功能" />
   </component>
 </project>

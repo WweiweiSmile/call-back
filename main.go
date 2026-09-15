@@ -38,12 +38,18 @@ func main() {
 		&models.UserBalance{},
 		&models.ScoreRequest{},
 		&models.Message{},
+		&models.ReviewHand{},
+		&models.ReviewLeakTag{},
+		&models.ReviewAnalysis{},
 	); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
 
 	// 插入测试数据
 	seedTestData()
+
+	// 同步漏洞标签字典（幂等，按 Code upsert）
+	seedLeakTags()
 
 	// 设置 Gin
 	r := gin.Default()
@@ -216,4 +222,43 @@ func seedTestData() {
 	log.Println("  - testuser1 / 123456")
 	log.Println("  - testuser2 / 123456")
 	log.Println("  - testuser3 / 123456")
+}
+
+// seedLeakTags 同步漏洞标签字典。
+//
+// 按 Code 逐条 upsert 而不是"表空才插入"：往 models.DefaultLeakTags 里新增标签后
+// 重启即可生效，不需要手工改库，也能让已有环境拿到新的判定说明。
+func seedLeakTags() {
+	created := 0
+	updated := 0
+
+	for i := range models.DefaultLeakTags {
+		tag := models.DefaultLeakTags[i]
+
+		var existing models.ReviewLeakTag
+		err := config.DB.Where("code = ?", tag.Code).First(&existing).Error
+
+		if err != nil {
+			// 不存在则新建
+			if err := config.DB.Create(&tag).Error; err != nil {
+				log.Printf("Failed to seed leak tag %s: %v", tag.Code, err)
+				continue
+			}
+			created++
+			continue
+		}
+
+		// 已存在则只同步字典内容，不动 is_active —— 运营手动下线的标签不能被启动逻辑重新打开
+		existing.Name = tag.Name
+		existing.Category = tag.Category
+		existing.Description = tag.Description
+		existing.SortOrder = tag.SortOrder
+		if err := config.DB.Save(&existing).Error; err != nil {
+			log.Printf("Failed to update leak tag %s: %v", tag.Code, err)
+			continue
+		}
+		updated++
+	}
+
+	log.Printf("Leak tags synced: %d created, %d updated", created, updated)
 }
