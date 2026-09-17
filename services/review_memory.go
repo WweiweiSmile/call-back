@@ -42,7 +42,13 @@ func NewReviewMemoryService() *ReviewMemoryService {
 
 // RecordInsights 把一次分析产出的 leaks / strengths 落成洞察行。
 //
-// 同一 analysis 重复写入时先清后写，保证幂等 —— 分析任务重跑不该让漏洞计数翻倍。
+// 一手牌只保留一套洞察，来自"对它当前内容的那次分析"：先按 hand_id 清掉旧的，
+// 再写入本次的。
+//
+// 为什么不能按 analysis_id 清：手牌改过之后重新分析会生成新的 analysis 行，
+// 旧行名下的洞察原样留着，画像聚合时同一手牌就被统计两次 ——
+// 用户填错了牌、改完重新分析，那手错误手牌仍然在画像里各计一份。
+// （历史分析记录本身不删，完整保留在 review_analyses 里，只是不再参与记忆。）
 func (s *ReviewMemoryService) RecordInsights(
 	userID, handID, analysisID uint,
 	result *models.AnalysisResult,
@@ -51,6 +57,32 @@ func (s *ReviewMemoryService) RecordInsights(
 		return nil
 	}
 
+	insights := buildInsights(userID, handID, analysisID, result)
+
+	// 清空与写入放在一个事务里：中途失败不该留下"旧的已删、新的没写"的空窗
+	return config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := deleteInsightsForHand(tx, userID, handID); err != nil {
+			return fmt.Errorf("清理旧洞察失败: %w", err)
+		}
+
+		// 本次一条洞察都没产出时也要清。手牌改对了、不再有漏洞，旧的那套必须跟着消失，
+		// 否则画像会永远记着一个已经被改掉的问题
+		if len(insights) == 0 {
+			return nil
+		}
+		if err := tx.Create(&insights).Error; err != nil {
+			return fmt.Errorf("写入洞察失败: %w", err)
+		}
+		return nil
+	})
+}
+
+// buildInsights 把分析结果展开成待落库的洞察行。
+// 抽成纯函数便于单测——哪些条目该丢、哪些该收敛，是这里最容易出错的判断
+func buildInsights(
+	userID, handID, analysisID uint,
+	result *models.AnalysisResult,
+) []models.ReviewInsight {
 	insights := make([]models.ReviewInsight, 0, len(result.Leaks)+len(result.Strengths))
 
 	for _, leak := range result.Leaks {
@@ -95,19 +127,15 @@ func (s *ReviewMemoryService) RecordInsights(
 		})
 	}
 
-	if len(insights) == 0 {
-		return nil
-	}
+	return insights
+}
 
-	if err := config.DB.Where("analysis_id = ?", analysisID).
-		Delete(&models.ReviewInsight{}).Error; err != nil {
-		return fmt.Errorf("清理旧洞察失败: %w", err)
-	}
-
-	if err := config.DB.Create(&insights).Error; err != nil {
-		return fmt.Errorf("写入洞察失败: %w", err)
-	}
-	return nil
+// deleteInsightsForHand 清掉一手牌的全部洞察（内容变了，旧结论不再对应当前手牌）。
+//
+// 编辑手牌与写入洞察都走这里，让"一手牌只有一套洞察"这个不变量只有一处实现
+func deleteInsightsForHand(tx *gorm.DB, userID, handID uint) error {
+	return tx.Where("hand_id = ? AND user_id = ?", handID, userID).
+		Delete(&models.ReviewInsight{}).Error
 }
 
 // CountInsightsAfter 统计水位线之后新增的洞察条数
@@ -269,10 +297,14 @@ func AggregateInsights(
 	return leaks, strengths
 }
 
-// MaybeRewriteSummary 按阈值决定是否重写总结，重写则在后台执行。
+// MaybeRewriteSummary 按阈值决定是否重写总结。
 //
-// 不阻塞调用方：分析任务已经跑完并落库了，总结重写是锦上添花，
-// 失败了不该影响这手牌的分析结果，也不该让接口报错。
+// 注意它是**同步**的：命中阈值会在这里真调一次模型（十几秒）。
+// 现有唯一的调用方 recordMemory 跑在分析的后台 goroutine 里，所以不阻塞接口；
+// 但从 HTTP 请求路径上调它会把接口卡住。
+//
+// 重写失败只记日志：分析任务已经跑完并落库了，总结是锦上添花，
+// 不该影响这手牌的分析结果，也不该让接口报错。
 func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 	profile, err := s.GetOrCreateProfile(userID)
 	if err != nil {

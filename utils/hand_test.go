@@ -186,6 +186,14 @@ func TestComputeHandHash(t *testing.T) {
 		t.Error("标题变化不应影响哈希")
 	}
 
+	// 加标签同理：heroTags 不进提示词，模型看不到它。
+	// 算进指纹的后果是给手牌加个标签就重置分析状态、清掉画像洞察，还得白花一次额度
+	h3b := validHand()
+	h3b.HeroTags = []string{"3bet底池", "河牌诈唬"}
+	if ComputeHandHash(h1) != ComputeHandHash(h3b) {
+		t.Error("标签变化不应影响哈希")
+	}
+
 	// 改思路必须换哈希 —— 它直接影响 AI 的分析结论
 	h4 := validHand()
 	h4.HeroThought = "当时想控池"

@@ -299,3 +299,51 @@ func TestBuildMemoryBlockEmpty(t *testing.T) {
 		t.Errorf("全空的记忆应返回空串，实际 %q", got)
 	}
 }
+
+func TestBuildInsights_SkipsUnusableAndClampsSeverity(t *testing.T) {
+	result := &models.AnalysisResult{
+		Leaks: []models.LeakItem{
+			{TagCode: "cbet_missing", Severity: 2, Evidence: "转牌没打"},   // 保留
+			{TagCode: "cbet_missing", Severity: 0, Evidence: "严重度低于1"}, // 严重度收敛到 1
+			{TagCode: "cbet_missing", Severity: 9, Evidence: "严重度高于3"}, // 严重度收敛到 3
+			{TagCode: "", Severity: 1, Evidence: "没有标签"},               // 丢
+			{TagCode: "river_over_fold", Severity: 1, Evidence: "   "}, // 没有证据，丢
+		},
+		Strengths: []models.StrengthItem{
+			{Text: "河牌价值下注尺度很好"},
+			{Text: "   "}, // 空文本，丢
+		},
+	}
+
+	got := buildInsights(7, 11, 22, result)
+
+	if len(got) != 4 {
+		t.Fatalf("应产出 4 条洞察（3 漏洞 + 1 优点），实际 %d 条: %+v", len(got), got)
+	}
+	for _, in := range got {
+		if in.UserID != 7 || in.HandID != 11 || in.AnalysisID != 22 {
+			t.Errorf("归属字段未透传: %+v", in)
+		}
+	}
+	if got[0].Severity != 2 {
+		t.Errorf("正常严重度不该被改，实际 %d", got[0].Severity)
+	}
+	if got[1].Severity != 1 {
+		t.Errorf("严重度 <1 应收敛到 1，实际 %d", got[1].Severity)
+	}
+	if got[2].Severity != 3 {
+		t.Errorf("严重度 >3 应收敛到 3，实际 %d", got[2].Severity)
+	}
+	// 优点不带标签，也不参与严重度
+	if got[3].Kind != models.InsightKindStrength || got[3].TagCode != "" || got[3].Severity != 0 {
+		t.Errorf("优点不应带标签与严重度: %+v", got[3])
+	}
+}
+
+func TestBuildInsights_EmptyResult(t *testing.T) {
+	// 空结果要返回空切片而不是 nil：调用方据此判断"本次没有洞察，旧的也要清掉"
+	got := buildInsights(1, 2, 3, &models.AnalysisResult{})
+	if len(got) != 0 {
+		t.Errorf("空结果应产出 0 条洞察，实际 %d 条", len(got))
+	}
+}

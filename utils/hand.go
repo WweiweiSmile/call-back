@@ -338,8 +338,14 @@ func streetNameForCount(cards int) string {
 
 // ComputeHandHash 计算手牌内容指纹。
 //
-// 刻意排除 Title 和 AnalyzeStatus：改标题不应该让已有的 AI 分析失效，
-// 否则用户重命名一手牌就得重新花一次模型调用。
+// 只放**真正会进提示词**的字段。刻意排除的每一项都有理由：
+//   - Title / AnalyzeStatus：改标题不该让已有的 AI 分析失效，否则用户重命名
+//     一手牌就得重新花一次模型调用
+//   - HeroTags：标签只是用户自己的翻查线索，不进提示词，模型看不到它。
+//     把它算进指纹的后果是"给手牌加个标签"就重置分析状态、清掉画像洞察，
+//     还得白花一次额度重新分析
+//
+// 反过来，HeroThought、Streets 这些会直接影响结论的字段一个都不能漏。
 func ComputeHandHash(h *models.ReviewHand) string {
 	payload := struct {
 		TableSize    int                   `json:"tableSize"`
@@ -355,7 +361,6 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		HeroThought  string                `json:"heroThought"`
 		Result       string                `json:"result"`
 		ResultAmount *float64              `json:"resultAmount"`
-		HeroTags     []string              `json:"heroTags"`
 	}{
 		TableSize:    h.TableSize,
 		HeroPosition: h.HeroPosition,
@@ -370,7 +375,6 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		HeroThought:  h.HeroThought,
 		Result:       h.Result,
 		ResultAmount: h.ResultAmount,
-		HeroTags:     h.HeroTags,
 	}
 
 	// 结构体字段顺序固定，encoding/json 的输出是确定的，可以直接做哈希

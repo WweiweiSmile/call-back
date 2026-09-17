@@ -89,6 +89,7 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		Order("id DESC").First(&reused).Error
 	if err == nil {
 		// 复用不消耗额度：本来就没调用模型
+		s.ensureMemoryRecorded(&reused, hand)
 		return &reused, true, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -214,24 +215,58 @@ func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, han
 	}
 }
 
-// recordMemory 把本次分析的产出并入长期记忆。
+// ensureMemoryRecorded 复用旧分析时补写记忆。
 //
-// 全程只记日志不返回错误：分析结果本身已经落库了，记忆是增量收益，
-// 不该因为它出问题就把这手牌标成失败、让用户白花一次额度
-func (s *ReviewAnalysisService) recordMemory(analysis *models.ReviewAnalysis, hand *models.ReviewHand) {
+// 存在的理由：手牌编辑会清掉它的洞察（见 ReviewService.UpdateHand），
+// 而"改了又改回来"之后内容指纹又对上了，这条路径直接复用旧分析、不调用模型，
+// 也就不会经过 recordMemory —— 不补这一次，这手牌会永久地从画像里消失。
+//
+// 只在手牌当前没有洞察时才写：反复点"分析"不该让洞察 id 反复变，
+// 那会干扰画像总结按 id 水位线判断的"新增洞察数"
+func (s *ReviewAnalysisService) ensureMemoryRecorded(analysis *models.ReviewAnalysis, hand *models.ReviewHand) {
+	var count int64
+	if err := config.DB.Model(&models.ReviewInsight{}).
+		Where("hand_id = ? AND user_id = ?", hand.ID, hand.UserID).
+		Count(&count).Error; err != nil {
+		log.Printf("[记忆] 统计手牌洞察失败 hand=%d: %v", hand.ID, err)
+		return
+	}
+	if count > 0 {
+		return
+	}
+
+	// 刻意不调 recordMemory：那会连带触发总结重写，而补写的是"编辑前就有、
+	// 内容也没变"的那一套，对总结没有新增信息。更要紧的是这条路径在 HTTP 请求里
+	// 同步执行，而 MaybeRewriteSummary 是真调模型的，会让接口卡十几秒
+	s.writeMemory(analysis, hand)
+}
+
+// writeMemory 写入洞察并刷新画像统计（不碰总结重写）。
+// 返回是否走通了——调用方据此决定要不要接着判断总结重写
+func (s *ReviewAnalysisService) writeMemory(analysis *models.ReviewAnalysis, hand *models.ReviewHand) bool {
 	if err := s.memoryService.RecordInsights(
 		hand.UserID, hand.ID, analysis.ID, analysis.Result,
 	); err != nil {
 		log.Printf("[记忆] 写入洞察失败 analysis=%d: %v", analysis.ID, err)
-		return
+		return false
 	}
 
 	// 统计是纯计算，每次都刷；summary 的重写由 MaybeRewriteSummary 按阈值把关
 	if _, err := s.memoryService.RefreshProfile(hand.UserID); err != nil {
 		log.Printf("[记忆] 刷新画像失败 user=%d: %v", hand.UserID, err)
+		return false
+	}
+	return true
+}
+
+// recordMemory 把本次分析的产出并入长期记忆。
+//
+// 全程只记日志不返回错误：分析结果本身已经落库了，记忆是增量收益，
+// 不该因为它出问题就把这手牌标成失败、让用户白花一次额度
+func (s *ReviewAnalysisService) recordMemory(analysis *models.ReviewAnalysis, hand *models.ReviewHand) {
+	if !s.writeMemory(analysis, hand) {
 		return
 	}
-
 	s.memoryService.MaybeRewriteSummary(hand.UserID)
 }
 

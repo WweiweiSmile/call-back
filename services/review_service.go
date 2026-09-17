@@ -163,11 +163,23 @@ func (s *ReviewService) UpdateHand(userID, handID uint, req *dto.ReviewHandReque
 	// 内容变了，之前的分析结论就不再对应当前这手牌。
 	// 置回 none 表示"当前内容尚未分析"，M3 会据此判断是否需要重新调用模型；
 	// 历史分析记录会保留在 analysis 表里，不会丢。
-	if oldHash != hand.ContentHash && hand.AnalyzeStatus == models.AnalyzeStatusDone {
+	contentChanged := oldHash != hand.ContentHash
+	if contentChanged && hand.AnalyzeStatus == models.AnalyzeStatusDone {
 		hand.AnalyzeStatus = models.AnalyzeStatusNone
 	}
 
-	if err := config.DB.Save(hand).Error; err != nil {
+	// 洞察必须跟着一起清。画像读的是 review_insights，只重置 analyze_status 是不够的：
+	// 留着旧洞察，画像会继续统计一手已经被改掉的手牌 —— 用户填错了牌再改，
+	// 那手牌就以"改之前"的错误结论留在画像里；若改完又重新分析，更是新旧各计一份
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(hand).Error; err != nil {
+			return err
+		}
+		if !contentChanged {
+			return nil
+		}
+		return deleteInsightsForHand(tx, userID, hand.ID)
+	}); err != nil {
 		return nil, err
 	}
 	return hand, nil
