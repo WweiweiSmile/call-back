@@ -10,6 +10,18 @@ import (
 
 type AuthService struct{}
 
+// toUserInfo 收敛用户信息的下发口径。登录、注册、取用户信息三处共用，
+// 免得加了字段（比如 role）只改了两处
+func toUserInfo(user *models.User) dto.UserInfo {
+	return dto.UserInfo{
+		ID:       user.ID,
+		Username: user.Username,
+		Nickname: user.Nickname,
+		Avatar:   user.Avatar,
+		Role:     user.Role,
+	}
+}
+
 // Register 注册用户
 func (s *AuthService) Register(req *dto.RegisterRequest) (*dto.LoginResponse, error) {
 	// 检查用户名是否已存在
@@ -42,12 +54,7 @@ func (s *AuthService) Register(req *dto.RegisterRequest) (*dto.LoginResponse, er
 
 	return &dto.LoginResponse{
 		Token: token,
-		User: dto.UserInfo{
-			ID:       user.ID,
-			Username: user.Username,
-			Nickname: user.Nickname,
-			Avatar:   user.Avatar,
-		},
+		User:  toUserInfo(user),
 	}, nil
 }
 
@@ -78,12 +85,7 @@ func (s *AuthService) Login(req *dto.LoginRequest) (*dto.LoginResponse, error) {
 
 	return &dto.LoginResponse{
 		Token: token,
-		User: dto.UserInfo{
-			ID:       user.ID,
-			Username: user.Username,
-			Nickname: user.Nickname,
-			Avatar:   user.Avatar,
-		},
+		User:  toUserInfo(&user),
 	}, nil
 }
 
@@ -94,10 +96,6 @@ func (s *AuthService) GetUserInfo(userID uint) (*dto.UserInfo, error) {
 		return nil, errors.New("用户不存在")
 	}
 
-	return &dto.UserInfo{
-		ID:       user.ID,
-		Username: user.Username,
-		Nickname: user.Nickname,
-		Avatar:   user.Avatar,
-	}, nil
+	info := toUserInfo(&user)
+	return &info, nil
 }

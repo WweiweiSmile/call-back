@@ -42,6 +42,25 @@ func (c *MessageController) GetList(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(list))
 }
 
+// GetDetail 获取单条消息详情（只能看自己的）
+func (c *MessageController) GetDetail(ctx *gin.Context) {
+	messageID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的消息ID"))
+		return
+	}
+
+	userID := middleware.GetUserID(ctx)
+
+	detail, err := c.messageService.GetByID(userID, uint(messageID))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(detail))
+}
+
 // GetUnreadCount 获取未读消息数（前端轮询用的廉价接口）
 func (c *MessageController) GetUnreadCount(ctx *gin.Context) {
 	userID := middleware.GetUserID(ctx)

@@ -19,6 +19,7 @@ type ReviewAnalysisService struct {
 	reviewService *ReviewService
 	aiClient      *AIClient
 	memoryService *ReviewMemoryService
+	suggestionSvc *TagSuggestionService
 }
 
 func NewReviewAnalysisService() *ReviewAnalysisService {
@@ -26,6 +27,7 @@ func NewReviewAnalysisService() *ReviewAnalysisService {
 		reviewService: &ReviewService{},
 		aiClient:      NewAIClient(),
 		memoryService: NewReviewMemoryService(),
+		suggestionSvc: &TagSuggestionService{},
 	}
 }
 
@@ -204,6 +206,12 @@ func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, han
 		analysisID, nowMs, result.TokensIn, result.TokensOut)
 
 	s.recordMemory(analysis, hand)
+
+	// 模型编出来的新标签进待审队列，等系统管理审批后才会进入所有人共用的字典。
+	// 与 recordMemory 同样是"只记日志不返回错误"
+	if analysis.Result != nil && len(analysis.Result.SuggestedTags) > 0 {
+		s.suggestionSvc.RecordSuggestions(analysis.ID, analysis.Result.SuggestedTags)
+	}
 }
 
 // recordMemory 把本次分析的产出并入长期记忆。

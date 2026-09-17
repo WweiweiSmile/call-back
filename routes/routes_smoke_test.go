@@ -23,8 +23,11 @@ func TestSetupRoutes(t *testing.T) {
 		"POST /api/v1/score-requests/:id/cancel",
 		"GET /api/v1/messages",
 		"GET /api/v1/messages/unread-count",
+		"GET /api/v1/messages/:id",
 		"POST /api/v1/messages/:id/read",
 		"POST /api/v1/messages/read-all",
+		"POST /api/v1/reviews/tag-suggestions/:id/approve",
+		"POST /api/v1/reviews/tag-suggestions/:id/reject",
 	}
 
 	got := make(map[string]bool)

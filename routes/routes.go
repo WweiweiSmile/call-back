@@ -15,6 +15,7 @@ func SetupRoutes(r *gin.Engine) {
 	scoreRequestController := controllers.NewScoreRequestController()
 	messageController := controllers.NewMessageController()
 	reviewController := controllers.NewReviewController()
+	tagSuggestionController := controllers.NewTagSuggestionController()
 
 	// API 路由组
 	api := r.Group("/api/v1")
@@ -73,6 +74,9 @@ func SetupRoutes(r *gin.Engine) {
 				messages.GET("/unread-count", messageController.GetUnreadCount) // 未读数
 				messages.POST("/read-all", messageController.MarkAllRead)       // 全部已读
 				messages.POST("/:id/read", messageController.MarkRead)          // 单条已读
+				// 静态段与通配段同层共存是允许的（gin 只在新增段以 : 开头时才走冲突分支），
+				// /unread-count 会稳定命中静态路由，匹配不到才落到 :id
+				messages.GET("/:id", messageController.GetDetail) // 消息详情
 			}
 
 			// 复盘（手牌记录 + AI 分析 + 长期记忆）
@@ -93,6 +97,10 @@ func SetupRoutes(r *gin.Engine) {
 				// 因为它们的第一段就不同（leak-tags / ai-status vs hands）
 				reviews.GET("/leak-tags", reviewController.GetLeakTags) // 漏洞标签字典
 				reviews.GET("/ai-status", reviewController.GetAIStatus) // AI 可用状态与剩余额度
+
+				// AI 新标签的入库审批（只有系统管理能操作，在 service 层校验）
+				reviews.POST("/tag-suggestions/:id/approve", tagSuggestionController.Approve)
+				reviews.POST("/tag-suggestions/:id/reject", tagSuggestionController.Reject)
 
 				// 长期记忆（M4）：画像与漏洞钻取
 				reviews.GET("/profile", reviewController.GetProfile)                             // 我的复盘画像

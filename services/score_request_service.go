@@ -65,7 +65,7 @@ func (s *ScoreRequestService) Create(userID uint, req *dto.CreateScoreRequestReq
 		return pushMessage(tx, game.CreatorID, models.MsgTypeRequestCreated,
 			"新的存取分申请",
 			fmt.Sprintf("%s 提交了%s申请 %s 分", applicantName, typeLabel(req.Type), formatAmount(req.Amount)),
-			&game.ID, &request.ID)
+			messageRef{GameID: &game.ID, RequestID: &request.ID})
 	})
 	if err != nil {
 		return nil, err
@@ -191,7 +191,7 @@ func (s *ScoreRequestService) Approve(reviewerID, requestID uint, req *dto.Revie
 		return pushMessage(tx, result.UserID, models.MsgTypeRequestApproved,
 			"存取分申请已通过",
 			fmt.Sprintf("你提交的%s申请 %s 分已通过审核", typeLabel(result.Type), formatAmount(result.Amount)),
-			&result.GameID, &result.ID)
+			messageRef{GameID: &result.GameID, RequestID: &result.ID})
 	})
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func (s *ScoreRequestService) Reject(reviewerID, requestID uint, req *dto.Review
 		return pushMessage(tx, result.UserID, models.MsgTypeRequestRejected,
 			"存取分申请被驳回",
 			fmt.Sprintf("你提交的%s申请 %s 分被驳回：%s", typeLabel(result.Type), formatAmount(result.Amount), reason),
-			&result.GameID, &result.ID)
+			messageRef{GameID: &result.GameID, RequestID: &result.ID})
 	})
 	if err != nil {
 		return nil, err

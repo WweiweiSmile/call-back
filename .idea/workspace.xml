@@ -4,19 +4,15 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="feat：增加手牌复盘功能，当前进度 m3">
-      <change afterPath="$PROJECT_DIR$/database/migrate_20260915_table_size.sql" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/prompt_builder_test.go" afterDir="false" />
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="feat：完成 m4 m5功能">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/database/init.sql" beforeDir="false" afterPath="$PROJECT_DIR$/database/init.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/dto/review.go" beforeDir="false" afterPath="$PROJECT_DIR$/dto/review.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/review_analysis.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/review_analysis.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/review_hand.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/review_hand.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/review_hand_schema_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/review_hand_schema_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/prompt_builder.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/prompt_builder.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/review_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/hand.go" beforeDir="false" afterPath="$PROJECT_DIR$/utils/hand.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/hand_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/utils/hand_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/controllers/message_controller.go" beforeDir="false" afterPath="$PROJECT_DIR$/controllers/message_controller.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dto/message.go" beforeDir="false" afterPath="$PROJECT_DIR$/dto/message.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/message.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/message.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/user.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/user.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/routes/routes.go" beforeDir="false" afterPath="$PROJECT_DIR$/routes/routes.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/routes/routes_smoke_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/routes/routes_smoke_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/message_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/message_service.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -116,6 +112,7 @@
     <MESSAGE value="refactor: 移除startTime（开始时间)字段，创建即开始，手动结束即结束" />
     <MESSAGE value="feat：页面添加存取分的功能" />
     <MESSAGE value="feat：增加手牌复盘功能，当前进度 m3" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat：增加手牌复盘功能，当前进度 m3" />
+    <MESSAGE value="feat：完成 m4 m5功能" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat：完成 m4 m5功能" />
   </component>
 </project>

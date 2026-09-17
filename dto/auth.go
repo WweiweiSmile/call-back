@@ -15,7 +15,7 @@ type RegisterRequest struct {
 
 // LoginResponse 登录响应
 type LoginResponse struct {
-	Token string `json:"token"`
+	Token string   `json:"token"`
 	User  UserInfo `json:"user"`
 }
 
@@ -25,4 +25,7 @@ type UserInfo struct {
 	Username string `json:"username"`
 	Nickname string `json:"nickname"`
 	Avatar   string `json:"avatar"`
+	// Role user/admin。前端据此显示管理员入口；真正的权限判定在后端 service，
+	// 前端拿到的这个值只用于渲染
+	Role string `json:"role"`
 }

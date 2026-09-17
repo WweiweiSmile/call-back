@@ -44,6 +44,7 @@ func main() {
 		&models.ReviewInsight{},
 		&models.ReviewProfile{},
 		&models.ReviewMessage{},
+		&models.ReviewTagSuggestion{},
 	); err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
