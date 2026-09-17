@@ -432,20 +432,28 @@ func formatAnalysisForChat(result *models.AnalysisResult) string {
 //
 // 把「旧总结 + 统计 + 新增洞察」一起给，是要模型做增量修订而不是从零重写：
 // 从零重写会让它把注意力全压在最新几手牌上，总结随最新一手牌剧烈摆动。
+//
+// window 是本次统计覆盖的范围。必须写进提示词：模型看到"出现 3 次"时得知道
+// 这是 30 手里的 3 次还是 200 手里的 3 次，否则它给出的频率判断没有意义
 func BuildProfileSummaryPrompt(
 	profile *models.ReviewProfile,
 	newInsights []models.ReviewInsight,
+	window ProfileWindow,
 ) (string, string) {
 	system := `你是一位德州扑克教练，负责维护学员的长期复盘画像。
 你的任务是根据统计数据与最新几手牌的洞察，更新一段给学员看的阶段总结。
 
 写作要求：
 1. 不超过 500 字，用中文，口语化，像一个了解他的教练在说话。
-2. 讲趋势，不要罗列标签。「这个毛病最近几手牌反复出现」比「你有这个毛病」有用得多。
+2. 讲趋势，不要罗列标签。「这个毛病最近反复出现」比「你有这个毛病」有用得多。
 3. 只有给到的数据支持才能下结论。统计里没有的问题不要编，也不要凭扑克常识替他补全。
 4. 学员有进步就点出来，但不要为了鼓励而虚构优点。
 5. 不要标题、不要分点符号堆砌、不要 markdown，就是一段自然的话。
-6. 直接输出总结正文，不要任何前缀、说明或解释。`
+6. 直接输出总结正文，不要任何前缀、说明或解释。
+7. 漏洞统计分「窗口内次数」与「窗口外累计」。窗口内是 0、窗口外很多，说明这个毛病
+   以前常犯、最近这些手没再出现 —— 那是进步，要写出来，不要描述成仍然存在的问题。
+8. 统计窗口覆盖的手数很少时，样本不足以谈趋势，只描述你观察到的现象，
+   不要写「你最近持续…」「你总是…」这类结论性的判断。`
 
 	var sb strings.Builder
 
@@ -457,15 +465,27 @@ func BuildProfileSummaryPrompt(
 		sb.WriteString("\n")
 	}
 
-	fmt.Fprintf(&sb, "\n## 已复盘手牌数\n%d\n", profile.HandsReviewed)
+	fmt.Fprintf(&sb, "\n## 本次统计窗口\n最近 %d 手已分析手牌", window.Hands)
+	if !window.Since.IsZero() {
+		fmt.Fprintf(&sb, "（自 %s 起）", window.Since.Format("2006-01-02"))
+	}
+	sb.WriteString("\n")
+	if window.CappedByDays {
+		fmt.Fprintf(&sb, "更早的手牌已超过 %d 天，不再计入\n", ProfileWindowDays)
+	}
+	if window.IsThin() {
+		fmt.Fprintf(&sb, "⚠ 样本不足 %d 手，只描述现象，不要下趋势性结论\n", ProfileMinSamplesForTrend)
+	}
 
-	sb.WriteString("\n## 漏洞标签统计（按出现次数从多到少）\n")
+	fmt.Fprintf(&sb, "\n## 累计已复盘手牌数\n%d\n", profile.HandsReviewed)
+
+	sb.WriteString("\n## 漏洞标签统计（按窗口内出现次数从多到少）\n")
 	if len(profile.Leaks) == 0 {
 		sb.WriteString("（暂无）\n")
 	} else {
 		for _, leak := range profile.Leaks {
-			fmt.Fprintf(&sb, "- %s：出现 %d 次，最近 %s，平均严重度 %.1f\n",
-				leak.Name, leak.Count, leak.LastSeenAt, leak.AvgSeverity)
+			fmt.Fprintf(&sb, "- %s：窗口内 %d 次，窗口外累计 %d 次，最近 %s，平均严重度 %.1f\n",
+				leak.Name, leak.Count, leak.HistoricCount, leak.LastSeenAt, leak.AvgSeverity)
 		}
 	}
 

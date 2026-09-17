@@ -4,14 +4,11 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="feat：新标签 申请审批功能添加">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/review_analysis_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_analysis_service.go" afterDir="false" />
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 修改手牌，会保留两份分析存入画像中处理">
+      <change beforePath="$PROJECT_DIR$/models/review_insight.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/review_insight.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/prompt_builder.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/prompt_builder.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/review_memory.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_memory.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/review_memory_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_memory_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/review_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/hand.go" beforeDir="false" afterPath="$PROJECT_DIR$/utils/hand.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/hand_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/utils/hand_test.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -113,6 +110,7 @@
     <MESSAGE value="feat：增加手牌复盘功能，当前进度 m3" />
     <MESSAGE value="feat：完成 m4 m5功能" />
     <MESSAGE value="feat：新标签 申请审批功能添加" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat：新标签 申请审批功能添加" />
+    <MESSAGE value="refactor: 修改手牌，会保留两份分析存入画像中处理" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: 修改手牌，会保留两份分析存入画像中处理" />
   </component>
 </project>

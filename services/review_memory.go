@@ -15,10 +15,30 @@ import (
 
 // 画像相关阈值与容量上限
 const (
-	// SummaryRewriteMinNewInsights 距上次重写新增这么多条洞察就触发重写
-	SummaryRewriteMinNewInsights = 5
-	// SummaryRewriteMaxAgeDays 距上次重写超过这么多天、且至少有一条新增，也触发重写
-	SummaryRewriteMaxAgeDays = 7
+	// ProfileWindowHands 统计窗口的手数上限：画像只看最近这么多手
+	ProfileWindowHands = 30
+	// ProfileWindowDays 统计窗口的天数上限，与手数取先到者 ——
+	// 够 ProfileWindowHands 手就停，不满但录入时间超过这么多天的丢掉。
+	//
+	// 为什么要两个维度：只按手数，一个半年前打了 200 手、最近没再打的人会被
+	// 当成现状；只按天数，低频用户（一个月 5 手）样本会少到无话可说。
+	// 取先到者，高频的人看近期，低频的人有样本。
+	//
+	// 时间取的是录入时间（review_hands.created_at），系统里没有"实际打牌时间"
+	ProfileWindowDays = 90
+	// ProfileMinSamplesForTrend 窗口内不足这么多手时，提示词要求模型只描述
+	// 现象、不下趋势性结论。样本太小时"你最近持续…"必然是编的
+	ProfileMinSamplesForTrend = 10
+
+	// SummaryRewriteMinNewHands 距上次重写新增这么多手才触发重写。
+	//
+	// 按手数而不是洞察条数：一手牌产出几条洞察波动很大（有的 1 条有的 5 条），
+	// 按条数计等于"分析得越细的手牌越容易触发重写"，是错的激励。
+	// 10 手约 20~50 条新证据，够形成趋势而不是"最近一手牌的印象"
+	SummaryRewriteMinNewHands = 10
+	// SummaryRewriteMaxAgeDays 距上次重写超过这么多天、且至少有一手新增，也触发重写
+	SummaryRewriteMaxAgeDays = 14
+
 	// ProfileTopEvidenceCount 每个漏洞在画像里保留几条证据
 	ProfileTopEvidenceCount = 3
 	// ProfileStrengthCount 画像里保留几条最近的优点
@@ -30,6 +50,25 @@ const (
 	// memoryRecentThoughtCount 记忆块里带几条玩家自己的近期原话
 	memoryRecentThoughtCount = 3
 )
+
+// ProfileWindow 一次统计覆盖的范围。
+//
+// 有了它才能告诉模型"你看到的这些数字是多大的样本"，否则模型会拿窗口内的
+// 少数几条当成全部历史
+type ProfileWindow struct {
+	// Hands 窗口内已完成分析的手牌数
+	Hands int
+	// Since 窗口内最早一手的录入日期。Hands 为 0 时为零值
+	Since time.Time
+	// CappedByDays 是否存在"因为超过 ProfileWindowDays 天而没被计入"的手牌。
+	// 为真时提示词要说明一句，否则模型会把窗口内这几十手当成学员的全部历史
+	CappedByDays bool
+}
+
+// IsThin 样本是否少到不足以谈趋势
+func (w ProfileWindow) IsThin() bool {
+	return w.Hands < ProfileMinSamplesForTrend
+}
 
 // ReviewMemoryService 长期记忆：洞察落库、画像聚合、总结重写
 type ReviewMemoryService struct {
@@ -138,11 +177,16 @@ func deleteInsightsForHand(tx *gorm.DB, userID, handID uint) error {
 		Delete(&models.ReviewInsight{}).Error
 }
 
-// CountInsightsAfter 统计水位线之后新增的洞察条数
-func (s *ReviewMemoryService) CountInsightsAfter(userID, afterID uint) (int, error) {
+// CountNewHandsAfter 统计水位线之后有多少手牌产出了新洞察。
+//
+// 复用洞察的水位线去数手牌，是为了不额外存一个"上次总结时的最大手牌 ID"：
+// 洞察在分析成功后写入，id 与手牌一一对应，数 distinct hand_id 就是新增手数。
+// 分析完但一条洞察都没产出的手牌不计入 —— 那种手牌本来也没什么可总结的
+func (s *ReviewMemoryService) CountNewHandsAfter(userID, afterInsightID uint) (int, error) {
 	var count int64
 	err := config.DB.Model(&models.ReviewInsight{}).
-		Where("user_id = ? AND id > ?", userID, afterID).
+		Where("user_id = ? AND id > ?", userID, afterInsightID).
+		Distinct("hand_id").
 		Count(&count).Error
 	return int(count), err
 }
@@ -153,15 +197,15 @@ func (s *ReviewMemoryService) CountInsightsAfter(userID, afterID uint) (int, err
 // 二是稳定性 —— 每次都重写会让总结随最新一手牌剧烈摆动，
 // 用户看到"我的总结怎么天天变"，反而不再信任它。
 // 批量增量更新让总结反映的是趋势，而不是最后一手牌。
-func ShouldRewriteSummary(profile *models.ReviewProfile, newInsightCount int) bool {
-	if newInsightCount <= 0 {
+func ShouldRewriteSummary(profile *models.ReviewProfile, newHandCount int) bool {
+	if newHandCount <= 0 {
 		return false
 	}
 	// 还没有过总结：第一手牌就先把画像建立起来，否则画像页长期是空的
 	if profile.LastSummaryAt == nil || strings.TrimSpace(profile.Summary) == "" {
 		return true
 	}
-	if newInsightCount >= SummaryRewriteMinNewInsights {
+	if newHandCount >= SummaryRewriteMinNewHands {
 		return true
 	}
 	return time.Since(*profile.LastSummaryAt).Hours() >= SummaryRewriteMaxAgeDays*24
@@ -172,29 +216,35 @@ func ShouldRewriteSummary(profile *models.ReviewProfile, newInsightCount int) bo
 // 统计部分是纯计算，不调用模型，所以每次分析完都可以刷新；
 // 只有 summary 的生成才需要模型，那个由 MaybeRewriteSummary 把关。
 func (s *ReviewMemoryService) RefreshProfile(userID uint) (*models.ReviewProfile, error) {
+	profile, _, err := s.refreshProfile(userID)
+	return profile, err
+}
+
+// refreshProfile 刷新统计并顺带回传本次的统计窗口 ——
+// 总结重写要拿它写进提示词，单独再查一次纯属浪费
+func (s *ReviewMemoryService) refreshProfile(userID uint) (*models.ReviewProfile, ProfileWindow, error) {
 	profile, err := s.GetOrCreateProfile(userID)
 	if err != nil {
-		return nil, err
+		return nil, ProfileWindow{}, err
 	}
 
-	// 只统计手牌还在的洞察。删掉的手牌不该继续在画像里计数 ——
-	// 否则画像说"出现 4 次"、点进去却只列得出 3 条，用户无从判断哪个是真的。
-	// 子查询里的 Model(&ReviewHand{}) 自带软删除过滤，不用再写 deleted_at IS NULL
-	var insights []models.ReviewInsight
-	if err := config.DB.Where("user_id = ?", userID).
-		Where("hand_id IN (?)",
-			config.DB.Model(&models.ReviewHand{}).Select("id").Where("user_id = ?", userID)).
-		Order("id ASC").Find(&insights).Error; err != nil {
-		return nil, err
+	window, err := profileWindowOf(userID)
+	if err != nil {
+		return nil, ProfileWindow{}, err
 	}
 
-	leaks, strengths := AggregateInsights(insights, s.leakTagNames())
+	windowed, historic, err := loadInsights(userID, window.handIDs)
+	if err != nil {
+		return nil, ProfileWindow{}, err
+	}
+
+	leaks, strengths := AggregateInsights(windowed, historic, s.leakTagNames())
 
 	var handsReviewed int64
 	if err := config.DB.Model(&models.ReviewHand{}).
 		Where("user_id = ? AND analyze_status = ?", userID, models.AnalyzeStatusDone).
 		Count(&handsReviewed).Error; err != nil {
-		return nil, err
+		return nil, ProfileWindow{}, err
 	}
 
 	profile.Leaks = leaks
@@ -202,9 +252,88 @@ func (s *ReviewMemoryService) RefreshProfile(userID uint) (*models.ReviewProfile
 	profile.HandsReviewed = int(handsReviewed)
 
 	if err := config.DB.Save(profile).Error; err != nil {
-		return nil, fmt.Errorf("保存画像失败: %w", err)
+		return nil, ProfileWindow{}, fmt.Errorf("保存画像失败: %w", err)
 	}
-	return profile, nil
+	return profile, window.ProfileWindow, nil
+}
+
+// profileWindow 统计窗口的机器视角：除了给提示词看的 ProfileWindow，
+// 还要带上窗口内的手牌 ID，供查洞察时过滤
+type profileWindow struct {
+	ProfileWindow
+	handIDs []uint
+}
+
+// profileWindowOf 算出一用户的统计窗口：最近 ProfileWindowHands 手、
+// 且录入时间在 ProfileWindowDays 天内的手牌。
+//
+// 取手牌而不是取洞察：用户心智里的"最近 30 手"是手牌，一手牌产出的
+// 洞察条数并不固定，按洞察取会让窗口大小随"分析得细不细"浮动
+func profileWindowOf(userID uint) (profileWindow, error) {
+	cutoff := time.Now().AddDate(0, 0, -ProfileWindowDays)
+
+	var hands []models.ReviewHand
+	if err := config.DB.
+		Select("id", "analyze_status", "created_at").
+		Where("user_id = ? AND created_at >= ?", userID, cutoff).
+		Order("id DESC").
+		Limit(ProfileWindowHands).
+		Find(&hands).Error; err != nil {
+		return profileWindow{}, err
+	}
+
+	w := profileWindow{handIDs: make([]uint, 0, len(hands))}
+	for _, h := range hands {
+		w.handIDs = append(w.handIDs, h.ID)
+		if h.AnalyzeStatus == models.AnalyzeStatusDone {
+			w.Hands++
+		}
+		if w.Since.IsZero() || h.CreatedAt.Before(w.Since) {
+			w.Since = h.CreatedAt
+		}
+	}
+
+	// 是否有手牌是被 90 天这条线挡在外面的。有就要在提示词里说明，
+	// 否则模型会把"窗口内的 30 手"当成学员的全部历史
+	var older int64
+	if err := config.DB.Model(&models.ReviewHand{}).
+		Where("user_id = ? AND created_at < ?", userID, cutoff).
+		Count(&older).Error; err != nil {
+		return profileWindow{}, err
+	}
+	w.CappedByDays = older > 0
+	return w, nil
+}
+
+// loadInsights 取窗口内与窗口外的洞察。
+//
+// 窗口内要完整字段（计数、严重度、证据），窗口外只需要 tag_code 与时间 ——
+// 它唯一的用途是回答"这个毛病以前是不是常犯"，不参与证据展示。
+// 两边都要求手牌还在：删掉的手牌不该继续在画像里计数，否则画像说"出现 4 次"、
+// 点进去却只列得出 3 条，用户无从判断哪个是真的
+func loadInsights(userID uint, windowIDs []uint) (windowed, historic []models.ReviewInsight, err error) {
+	liveHands := config.DB.Model(&models.ReviewHand{}).Select("id").Where("user_id = ?", userID)
+
+	if len(windowIDs) > 0 {
+		if err = config.DB.Where("user_id = ? AND hand_id IN ?", userID, windowIDs).
+			Order("id ASC").Find(&windowed).Error; err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// 窗口外的洞察用 NOT IN 排除。windowIDs 为空时不能拼 NOT IN（会退化成
+	// "NOT IN (NULL)"，一行都匹配不到），那时窗口外就是全部
+	q := config.DB.Model(&models.ReviewInsight{}).
+		Select("tag_code", "created_at").
+		Where("user_id = ? AND kind = ?", userID, models.InsightKindLeak).
+		Where("hand_id IN (?)", liveHands)
+	if len(windowIDs) > 0 {
+		q = q.Where("hand_id NOT IN ?", windowIDs)
+	}
+	if err = q.Find(&historic).Error; err != nil {
+		return nil, nil, err
+	}
+	return windowed, historic, nil
 }
 
 // AggregateInsights 把洞察原子聚合成画像里的漏洞排行与优点列表。
@@ -212,10 +341,16 @@ func (s *ReviewMemoryService) RefreshProfile(userID uint) (*models.ReviewProfile
 // 抽成不依赖数据库的纯函数，是因为这是整个长期记忆里最容易出错的一环
 // （分组、计数、排序、截断、标签改名），必须能脱离数据库单独测。
 //
+// windowed 是统计窗口内的洞察，参与计数、平均严重度与证据；
+// historic 是窗口之外的旧洞察，只用来回答"这个毛病以前是不是常犯"。
+// 两者分开是想让画像说得出「你以前老犯这个，最近 30 手没再出现」——
+// 只有窗口内的话，老毛病会无声消失，用户分不清是改掉了还是统计漏了。
+//
 // tagNames 是 tag_code → 中文名的映射，取不到名字时退化成用 code 展示，
 // 不能因为标签被停用就丢掉这段统计。
 func AggregateInsights(
-	insights []models.ReviewInsight,
+	windowed []models.ReviewInsight,
+	historic []models.ReviewInsight,
 	tagNames map[string]string,
 ) ([]models.ProfileLeakStat, []models.ProfileStrengthItem) {
 	// 用 map 累计、用 slice 记住首次出现顺序，保证同样的输入每次聚合出的顺序一致
@@ -230,18 +365,24 @@ func AggregateInsights(
 	leakOrder := make([]string, 0, 8)
 	strengths := make([]models.ProfileStrengthItem, 0, ProfileStrengthCount)
 
-	for _, in := range insights {
+	accOf := func(code string) *leakAcc {
+		acc := leakMap[code]
+		if acc == nil {
+			acc = &leakAcc{}
+			leakMap[code] = acc
+			leakOrder = append(leakOrder, code)
+		}
+		return acc
+	}
+
+	// 窗口内：计数、严重度、证据
+	for _, in := range windowed {
 		switch in.Kind {
 		case models.InsightKindLeak:
 			if in.TagCode == "" {
 				continue
 			}
-			acc := leakMap[in.TagCode]
-			if acc == nil {
-				acc = &leakAcc{}
-				leakMap[in.TagCode] = acc
-				leakOrder = append(leakOrder, in.TagCode)
-			}
+			acc := accOf(in.TagCode)
 			acc.count++
 			acc.sevSum += in.Severity
 			if in.CreatedAt.After(acc.lastSeen) {
@@ -261,6 +402,20 @@ func AggregateInsights(
 		}
 	}
 
+	// 窗口外：只累计次数与最近出现时间，不进证据。
+	// 这些标签同样要出现在结果里 —— 只在窗口外出现正是"已经改掉"的信号
+	historicCounts := make(map[string]int, 8)
+	for _, in := range historic {
+		if in.TagCode == "" {
+			continue
+		}
+		acc := accOf(in.TagCode)
+		historicCounts[in.TagCode]++
+		if in.CreatedAt.After(acc.lastSeen) {
+			acc.lastSeen = in.CreatedAt
+		}
+	}
+
 	leaks := make([]models.ProfileLeakStat, 0, len(leakOrder))
 	for _, code := range leakOrder {
 		acc := leakMap[code]
@@ -268,17 +423,26 @@ func AggregateInsights(
 		if name == "" {
 			name = code
 		}
+		// 只在窗口外出现过的条目没有分子，给 0 而不是 NaN ——
+		// 前端拿平均严重度选配色，NaN 会让所有比较都走 false 分支
+		avg := 0.0
+		if acc.count > 0 {
+			avg = float64(acc.sevSum) / float64(acc.count)
+		}
 		leaks = append(leaks, models.ProfileLeakStat{
-			TagCode:     code,
-			Name:        name,
-			Count:       acc.count,
-			LastSeenAt:  acc.lastSeen.Format("2006-01-02"),
-			AvgSeverity: float64(acc.sevSum) / float64(acc.count),
-			TopEvidence: acc.evidence,
+			TagCode:       code,
+			Name:          name,
+			Count:         acc.count,
+			HistoricCount: historicCounts[code],
+			LastSeenAt:    acc.lastSeen.Format("2006-01-02"),
+			AvgSeverity:   avg,
+			TopEvidence:   acc.evidence,
 		})
 	}
 
-	// 出现次数多的排前面；次数相同按最近出现时间排，让"最近老犯"的浮上来
+	// 窗口内出现次数多的排前面；次数相同按最近出现时间排，让"最近老犯"的浮上来。
+	// 只在窗口外出现过的（count=0）自然沉到末尾，其中最近的又排更前 ——
+	// 三个月前还在犯的老毛病，比一年前的更值得提醒
 	sort.SliceStable(leaks, func(i, j int) bool {
 		if leaks[i].Count != leaks[j].Count {
 			return leaks[i].Count > leaks[j].Count
@@ -312,13 +476,13 @@ func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 		return
 	}
 
-	newCount, err := s.CountInsightsAfter(userID, profile.LastSummaryInsightID)
+	newHands, err := s.CountNewHandsAfter(userID, profile.LastSummaryInsightID)
 	if err != nil {
-		log.Printf("[记忆] 统计新增洞察失败 user=%d: %v", userID, err)
+		log.Printf("[记忆] 统计新增手数失败 user=%d: %v", userID, err)
 		return
 	}
 
-	if !ShouldRewriteSummary(profile, newCount) {
+	if !ShouldRewriteSummary(profile, newHands) {
 		return
 	}
 
@@ -333,13 +497,9 @@ func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 // 传的是「已有总结 + 新增洞察 + 标签统计」，让模型做增量更新而不是从零重写：
 // 从零重写会让它把注意力全放在最新几手牌上，总结随最新一手牌剧烈摆动。
 func (s *ReviewMemoryService) RewriteSummary(ctx context.Context, userID uint) (*models.ReviewProfile, error) {
-	profile, err := s.GetOrCreateProfile(userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 先刷统计，保证喂给模型的计数和画像页看到的一致
-	profile, err = s.RefreshProfile(userID)
+	// 顺带拿到统计窗口：提示词必须告诉模型这些数字覆盖了多大的样本，
+	// 以及"窗口内没再出现"意味着进步
+	profile, window, err := s.refreshProfile(userID)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +515,7 @@ func (s *ReviewMemoryService) RewriteSummary(ctx context.Context, userID uint) (
 		return nil, err
 	}
 
-	system, user := BuildProfileSummaryPrompt(profile, newInsights)
+	system, user := BuildProfileSummaryPrompt(profile, newInsights, window)
 
 	// 500 字中文留 800 token 足够。给太多会让模型忍不住写长
 	completion, err := s.aiClient.Complete(ctx, system, user, 800)
@@ -439,10 +599,18 @@ func (s *ReviewMemoryService) BuildMemoryContext(userID uint) *MemoryContext {
 		HandsReviewed: profile.HandsReviewed,
 	}
 
-	for i, leak := range profile.Leaks {
-		if i >= ProfileTopLeaksInPrompt {
+	// 只注入统计窗口内真的出现过的。画像里还留着"只在窗口外出现过"的条目
+	// （那是给画像页和总结看的进步信号），但拿它去点评当前这手牌就是翻旧账了：
+	// 模型会对着三年前的毛病提醒用户"注意别再犯"
+	injected := 0
+	for _, leak := range profile.Leaks {
+		if leak.Count == 0 {
+			continue
+		}
+		if injected >= ProfileTopLeaksInPrompt {
 			break
 		}
+		injected++
 		evidence := ""
 		if len(leak.TopEvidence) > 0 {
 			evidence = leak.TopEvidence[len(leak.TopEvidence)-1]

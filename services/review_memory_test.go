@@ -38,7 +38,7 @@ func TestAggregateInsights_GroupsCountsAndAverages(t *testing.T) {
 		leak("bluff_too_much", 1, "第三手证据", day(2)),
 	}
 
-	leaks, _ := AggregateInsights(insights, map[string]string{
+	leaks, _ := AggregateInsights(insights, nil, map[string]string{
 		"call_too_loose": "跟注过松",
 		"bluff_too_much": "诈唬过多",
 	})
@@ -69,7 +69,7 @@ func TestAggregateInsights_TieBreaksByRecency(t *testing.T) {
 		leak("new_one", 1, "刚刚", day(5)),
 	}
 
-	leaks, _ := AggregateInsights(insights, nil)
+	leaks, _ := AggregateInsights(insights, nil, nil)
 	if len(leaks) != 2 {
 		t.Fatalf("应有 2 个漏洞，实际 %d 个", len(leaks))
 	}
@@ -86,7 +86,7 @@ func TestAggregateInsights_EvidenceKeepsLatestAndCaps(t *testing.T) {
 		leak("t", 1, "证据4", day(3)),
 	}
 
-	leaks, _ := AggregateInsights(insights, nil)
+	leaks, _ := AggregateInsights(insights, nil, nil)
 	if len(leaks[0].TopEvidence) != ProfileTopEvidenceCount {
 		t.Fatalf("证据应截断到 %d 条，实际 %d 条", ProfileTopEvidenceCount, len(leaks[0].TopEvidence))
 	}
@@ -104,7 +104,7 @@ func TestAggregateInsights_UnknownTagFallsBackToCode(t *testing.T) {
 	// 标签被停用或改名时，不能因为查不到中文名就把这段统计丢掉
 	insights := []models.ReviewInsight{leak("retired_tag", 2, "证据", day(0))}
 
-	leaks, _ := AggregateInsights(insights, map[string]string{"other": "别的"})
+	leaks, _ := AggregateInsights(insights, nil, map[string]string{"other": "别的"})
 	if len(leaks) != 1 {
 		t.Fatalf("应保留 1 个漏洞，实际 %d 个", len(leaks))
 	}
@@ -117,7 +117,7 @@ func TestAggregateInsights_SkipsEmptyTagCode(t *testing.T) {
 	// tag_code 为空的洞察是脏数据（写入时已拦截），聚合时也不能让它变成一个空名目
 	insights := []models.ReviewInsight{leak("", 2, "证据", day(0))}
 
-	leaks, _ := AggregateInsights(insights, nil)
+	leaks, _ := AggregateInsights(insights, nil, nil)
 	if len(leaks) != 0 {
 		t.Errorf("tag_code 为空的洞察不应进入排行，实际 %+v", leaks)
 	}
@@ -130,7 +130,7 @@ func TestAggregateInsights_StrengthsCappedNewestFirst(t *testing.T) {
 			"优点"+string(rune('0'+i)), uint(i), day(i)))
 	}
 
-	_, strengths := AggregateInsights(insights, nil)
+	_, strengths := AggregateInsights(insights, nil, nil)
 	if len(strengths) != ProfileStrengthCount {
 		t.Fatalf("优点应截断到 %d 条，实际 %d 条", ProfileStrengthCount, len(strengths))
 	}
@@ -144,7 +144,7 @@ func TestAggregateInsights_StrengthsCappedNewestFirst(t *testing.T) {
 }
 
 func TestAggregateInsights_EmptyInput(t *testing.T) {
-	leaks, strengths := AggregateInsights(nil, nil)
+	leaks, strengths := AggregateInsights(nil, nil, nil)
 	if len(leaks) != 0 || len(strengths) != 0 {
 		t.Errorf("空输入应得到空结果，实际 leaks=%v strengths=%v", leaks, strengths)
 	}
@@ -159,56 +159,56 @@ func TestShouldRewriteSummary(t *testing.T) {
 	cases := []struct {
 		name        string
 		profile     *models.ReviewProfile
-		newInsights int
+		newHands    int
 		wantRewrite bool
 		why         string
 	}{
 		{
 			name:        "首次分析就建立画像",
 			profile:     &models.ReviewProfile{},
-			newInsights: 1,
+			newHands:    1,
 			wantRewrite: true,
 			why:         "还没有过总结，第一手牌就把画像建起来，否则画像页长期是空的",
 		},
 		{
 			name:        "总结为空也算没建过",
 			profile:     &models.ReviewProfile{LastSummaryAt: &recent, Summary: ""},
-			newInsights: 1,
+			newHands:    1,
 			wantRewrite: true,
 			why:         "上次重写产出了空内容，等同于没有总结",
 		},
 		{
 			name:        "刚重写过且新增不足",
 			profile:     &models.ReviewProfile{LastSummaryAt: &recent, Summary: "已有总结"},
-			newInsights: SummaryRewriteMinNewInsights - 1,
+			newHands:    SummaryRewriteMinNewHands - 1,
 			wantRewrite: false,
 			why:         "不到阈值不重写，避免总结随最新一手牌抖动",
 		},
 		{
 			name:        "新增达到阈值",
 			profile:     &models.ReviewProfile{LastSummaryAt: &recent, Summary: "已有总结"},
-			newInsights: SummaryRewriteMinNewInsights,
+			newHands:    SummaryRewriteMinNewHands,
 			wantRewrite: true,
 			why:         "攒够了新洞察就该刷新",
 		},
 		{
-			name:        "超过 7 天且有一条新增",
+			name:        "超过 14 天且有一手新增",
 			profile:     &models.ReviewProfile{LastSummaryAt: &longAgo, Summary: "已有总结"},
-			newInsights: 1,
+			newHands:    1,
 			wantRewrite: true,
 			why:         "时间兜底：久了即便新增少也要重写",
 		},
 		{
 			name:        "超过 7 天但没有任何新增",
 			profile:     &models.ReviewProfile{LastSummaryAt: &longAgo, Summary: "已有总结"},
-			newInsights: 0,
+			newHands:    0,
 			wantRewrite: false,
 			why:         "没有新信息，重写只会产出空话，还白花一次调用",
 		},
 		{
 			name:        "没有新增洞察",
 			profile:     &models.ReviewProfile{},
-			newInsights: 0,
+			newHands:    0,
 			wantRewrite: false,
 			why:         "没有新信息就不该调用模型",
 		},
@@ -216,7 +216,7 @@ func TestShouldRewriteSummary(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ShouldRewriteSummary(tc.profile, tc.newInsights)
+			got := ShouldRewriteSummary(tc.profile, tc.newHands)
 			if got != tc.wantRewrite {
 				t.Errorf("ShouldRewriteSummary = %v，期望 %v（%s）", got, tc.wantRewrite, tc.why)
 			}
@@ -237,12 +237,20 @@ func TestBuildProfileSummaryPrompt(t *testing.T) {
 		strength("河牌放弃了边缘抓诈唬，判断正确", 7, day(0)),
 	}
 
-	system, user := BuildProfileSummaryPrompt(profile, newInsights)
+	window := ProfileWindow{Hands: 25, Since: day(-40)}
+	system, user := BuildProfileSummaryPrompt(profile, newInsights, window)
+
+	if !strings.Contains(user, "最近 25 手已分析手牌") {
+		t.Errorf("user 段应写明统计窗口覆盖多少手，否则模型判断不了样本大小，实际:\n%s", user)
+	}
+	if !strings.Contains(system, "窗口内是 0、窗口外很多") {
+		t.Errorf("system 段应要求模型把'以前常犯、最近没再出现'写成进步，实际:\n%s", system)
+	}
 
 	if !strings.Contains(user, "之前的问题是翻前跟注过松。") {
 		t.Error("user 段应带上已有总结，否则模型会从零重写")
 	}
-	if !strings.Contains(user, "翻前跟注过宽：出现 6 次") {
+	if !strings.Contains(user, "翻前跟注过宽：窗口内 6 次，窗口外累计 0 次") {
 		t.Errorf("user 段应带上标签统计，实际:\n%s", user)
 	}
 	if !strings.Contains(user, "[漏洞/严重度3] 按钮位用 K9o 跟了 3bet") {
@@ -260,7 +268,7 @@ func TestBuildProfileSummaryPrompt(t *testing.T) {
 func TestBuildProfileSummaryPrompt_NoNewInsights(t *testing.T) {
 	// 手动触发重写时可能没有新增洞察，提示词要说明是"重新组织"而不是"无事可做"
 	profile := &models.ReviewProfile{HandsReviewed: 3, Summary: "旧总结"}
-	_, user := BuildProfileSummaryPrompt(profile, nil)
+	_, user := BuildProfileSummaryPrompt(profile, nil, ProfileWindow{Hands: 3, Since: day(0)})
 
 	if !strings.Contains(user, "本次没有新增洞察") {
 		t.Errorf("应在提示词里说明没有新增，实际:\n%s", user)
@@ -346,4 +354,100 @@ func TestBuildInsights_EmptyResult(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("空结果应产出 0 条洞察，实际 %d 条", len(got))
 	}
+}
+
+func TestAggregateInsights_SplitsWindowAndHistoric(t *testing.T) {
+	// 窗口内：翻前跟注过宽 2 次、转牌过度弃牌 1 次
+	windowed := []models.ReviewInsight{
+		leak("call_too_loose", 2, "窗口内证据一", day(-2)),
+		leak("call_too_loose", 3, "窗口内证据二", day(-1)),
+		leak("turn_over_fold", 1, "窗口内证据三", day(-3)),
+	}
+	// 窗口外：河牌过度弃牌 5 次（只有它有），跟注过宽 3 次
+	historic := []models.ReviewInsight{
+		leak("river_over_fold", 0, "", day(-100)),
+		leak("river_over_fold", 0, "", day(-120)),
+		leak("river_over_fold", 0, "", day(-140)),
+		leak("river_over_fold", 0, "", day(-160)),
+		leak("river_over_fold", 0, "", day(-180)),
+		leak("call_too_loose", 0, "", day(-95)),
+		leak("call_too_loose", 0, "", day(-96)),
+		leak("call_too_loose", 0, "", day(-97)),
+	}
+
+	leaks, _ := AggregateInsights(windowed, historic, nil)
+	byCode := map[string]models.ProfileLeakStat{}
+	for _, l := range leaks {
+		byCode[l.TagCode] = l
+	}
+
+	loose := byCode["call_too_loose"]
+	assertEq(t, "窗口内次数只数窗口内", loose.Count, 2)
+	assertEq(t, "窗口外次数单独累计", loose.HistoricCount, 3)
+	assertEq(t, "平均严重度只按窗口内算", loose.AvgSeverity, 2.5)
+
+	// 只在窗口外出现过的标签必须留在画像里 —— 这正是"已经改掉"的信号
+	river, ok := byCode["river_over_fold"]
+	assertEq(t, "只在窗口外出现过的标签也要保留", ok, true)
+	assertEq(t, "它的窗口内次数是 0", river.Count, 0)
+	assertEq(t, "它的窗口外累计被记下", river.HistoricCount, 5)
+	assertEq(t, "窗口内没出现过时平均严重度是 0 而不是 NaN", river.AvgSeverity, 0.0)
+	assertEq(t, "它的最近出现时间来自窗口外", river.LastSeenAt, day(-100).Format("2006-01-02"))
+	assertEq(t, "窗口外条目不带证据", len(river.TopEvidence), 0)
+
+	// 排序：窗口内有次数的在前，纯历史的沉底
+	assertEq(t, "窗口内次数多的排最前", leaks[0].TagCode, "call_too_loose")
+	assertEq(t, "纯历史条目排在窗口内条目之后", leaks[len(leaks)-1].TagCode, "river_over_fold")
+}
+
+func TestAggregateInsights_AllHistoric(t *testing.T) {
+	// 窗口内空（比如用户歇了半年又回来）：不能崩，也不能把历史当现状
+	historic := []models.ReviewInsight{leak("river_over_fold", 0, "", day(-200))}
+	leaks, strengths := AggregateInsights(nil, historic, nil)
+
+	assertEq(t, "窗口为空时仍返回历史标签", len(leaks), 1)
+	assertEq(t, "窗口为空时没有优点", len(strengths), 0)
+	assertEq(t, "窗口为空时计数为 0", leaks[0].Count, 0)
+}
+
+func TestProfileWindowIsThin(t *testing.T) {
+	cases := []struct {
+		hands int
+		want  bool
+	}{
+		{0, true},
+		{ProfileMinSamplesForTrend - 1, true},
+		{ProfileMinSamplesForTrend, false},
+		{ProfileWindowHands, false},
+	}
+	for _, tc := range cases {
+		if got := (ProfileWindow{Hands: tc.hands}).IsThin(); got != tc.want {
+			t.Errorf("%d 手时 IsThin = %v，期望 %v", tc.hands, got, tc.want)
+		}
+	}
+}
+
+func TestBuildProfileSummaryPrompt_ThinSampleWarnsModel(t *testing.T) {
+	// 样本太少时必须明说，否则模型会拿 3 手牌编出"你最近持续…"
+	profile := &models.ReviewProfile{HandsReviewed: 3, Summary: "旧总结"}
+	_, user := BuildProfileSummaryPrompt(profile, nil, ProfileWindow{Hands: 3, Since: day(-10)})
+	if !strings.Contains(user, "样本不足") {
+		t.Errorf("样本不足时应提示模型不要下趋势结论，实际:\n%s", user)
+	}
+
+	_, user2 := BuildProfileSummaryPrompt(profile, nil, ProfileWindow{Hands: 30, Since: day(-30)})
+	if strings.Contains(user2, "样本不足") {
+		t.Errorf("样本充足时不该出现样本不足的提示，实际:\n%s", user2)
+	}
+}
+
+// assertEq 断言相等并把成功的用例也打出来 ——
+// 画像逻辑的用例大多是"这个数应该是几"，全用 if+t.Errorf 写太啰嗦
+func assertEq[T comparable](t *testing.T, label string, got, want T) {
+	t.Helper()
+	if got != want {
+		t.Errorf("%s: got %v, want %v", label, got, want)
+		return
+	}
+	t.Logf("  PASS  %s", label)
 }

@@ -42,8 +42,15 @@ func (ReviewInsight) TableName() string {
 type ProfileLeakStat struct {
 	TagCode string `json:"tagCode"`
 	Name    string `json:"name"`
-	Count   int    `json:"count"`
-	// LastSeenAt 最近一次出现的时间（YYYY-MM-DD）
+	// Count 统计窗口内的出现次数
+	Count int `json:"count"`
+	// HistoricCount 统计窗口之外的累计次数。
+	//
+	// 用途是区分"已经改掉的毛病"：Count 为 0 而这个数很大，说明以前常犯、
+	// 最近这些手没再出现 —— 那是进步，不是数据缺失。没有它的话，窗口一收紧，
+	// 老毛病就无声消失了，用户分不清是改掉了还是统计漏了
+	HistoricCount int `json:"historicCount"`
+	// LastSeenAt 最近一次出现的时间（YYYY-MM-DD），含窗口之外的历史
 	LastSeenAt string `json:"lastSeenAt"`
 	// AvgSeverity 平均严重度，保留一位小数由前端处理
 	AvgSeverity float64 `json:"avgSeverity"`
