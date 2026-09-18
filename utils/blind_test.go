@@ -65,27 +65,48 @@ func TestBlindConfigIsZero(t *testing.T) {
 	}
 }
 
-// 认人的规则：位置对得上才记账。认不出来的宁可不记，也不能替没记录的人下注
+// 认人的规则：位置对得上才记账。认不出来的宁可不记，也不能替没记录的人下注。
+// 老手牌的对手行动记在聚合角色 "villain" 上，所以账也记在这个键上
 func TestBlindConfigPostedBlinds(t *testing.T) {
 	blinds := models.BlindConfig{
 		SmallBlindBB: 0.5, BigBlindBB: 1, TableSize: 9,
-		HeroPosition: models.PositionBB, KeyVillainPosition: models.PositionSB,
+		HeroPosition: models.PositionBB, LegacyVillainPosition: models.PositionSB,
 	}
 	posted := blinds.PostedBlinds()
 	if posted[models.ActorHero] != 1 {
 		t.Errorf("hero 在 BB，应记 1bb，实际 %v", posted[models.ActorHero])
 	}
 	if posted[models.ActorVillain] != 0.5 {
-		t.Errorf("关键对手在 SB，应记 0.5bb，实际 %v", posted[models.ActorVillain])
+		t.Errorf("老数据的对手在 SB，应记 0.5bb，实际 %v", posted[models.ActorVillain])
 	}
 
-	// 关键对手在 CO：两个盲注都不在已知的人头上，谁都不记
+	// 对手在 CO：两个盲注都不在已知的人头上，谁都不记
 	unknown := models.BlindConfig{
 		SmallBlindBB: 0.5, BigBlindBB: 1, TableSize: 9,
-		HeroPosition: models.PositionBTN, KeyVillainPosition: models.PositionCO,
+		HeroPosition: models.PositionBTN, LegacyVillainPosition: models.PositionCO,
 	}
 	if got := unknown.PostedBlinds(); len(got) != 0 {
 		t.Errorf("大小盲都认不出人时不该记到任何行动者头上，实际 %v", got)
+	}
+}
+
+// M7.1 起对手按位置记录行动，账也要记在位置这个键上。
+// 键对不上就等于没记账 —— 大盲跟注会被重复计算，所以这条单独钉死
+func TestBlindConfigPostedBlindsByPosition(t *testing.T) {
+	blinds := models.BlindConfig{
+		SmallBlindBB: 0.5, BigBlindBB: 1, TableSize: 9,
+		HeroPosition:     models.PositionBTN,
+		VillainPositions: []string{models.PositionSB, models.PositionCO},
+	}
+	posted := blinds.PostedBlinds()
+	if posted[models.PositionSB] != 0.5 {
+		t.Errorf("SB 位上的对手应记 0.5bb，实际 %v", posted[models.PositionSB])
+	}
+	if posted[models.PositionCO] != 0 {
+		t.Errorf("CO 位上的对手不该有盲注，实际 %v", posted[models.PositionCO])
+	}
+	if posted[models.ActorVillain] != 0 {
+		t.Errorf("新数据的对手不该再记到聚合角色 villain 上，实际 %v", posted[models.ActorVillain])
 	}
 }
 
@@ -150,7 +171,7 @@ func TestBigBlindCallIsNotDoubleCounted(t *testing.T) {
 	// BB 是关键对手，位置已知，能认出来
 	pots := ComputeStreetPots(streets, models.BlindConfig{
 		SmallBlindBB: 0.5, BigBlindBB: 1, TableSize: 9,
-		HeroPosition: models.PositionBTN, KeyVillainPosition: models.PositionBB,
+		HeroPosition: models.PositionBTN, LegacyVillainPosition: models.PositionBB,
 	})
 
 	if got := pots[models.StreetPreflop].PotEndBB; math.Abs(got-6.5) > 1e-9 {
@@ -201,7 +222,7 @@ func TestAnteDoesNotOffsetCallAmount(t *testing.T) {
 	// SB 0.5 + BB 1 + 前注 1×9人 = 10.5 死钱
 	pots := ComputeStreetPots(streets, models.BlindConfig{
 		SmallBlindBB: 0.5, BigBlindBB: 1, AnteBB: 1, TableSize: 9,
-		HeroPosition: models.PositionBTN, KeyVillainPosition: models.PositionBB,
+		HeroPosition: models.PositionBTN, LegacyVillainPosition: models.PositionBB,
 	})
 
 	// 10.5 + BTN 的 3 + BB 补的 2 = 15.5。前注若被拿去抵消，BB 只会补 1

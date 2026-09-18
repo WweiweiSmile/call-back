@@ -20,9 +20,15 @@ type BlindConfig struct {
 	// TableSize 前注折算用的人数。取"几人桌"而不是实际入池人数：
 	// 手牌记录里没有"谁已经离桌"这种信息，人数是唯一可依据的口径
 	TableSize int
-	// HeroPosition / KeyVillainPosition 用来把大小盲认到具体的人头上，见 PostedBlinds
-	HeroPosition       string
-	KeyVillainPosition string
+	// HeroPosition / VillainPositions 用来把大小盲认到具体的人头上，见 PostedBlinds
+	HeroPosition string
+	// VillainPositions 记了位置的对手（M7.1 起是全部对手）。
+	// 他们的行动按位置记录，所以账也记在位置这个键上
+	VillainPositions []string
+	// LegacyVillainPosition 老手牌里那个"关键对手"的位置。
+	// M7.1 之前只有他能被认出来，且当时所有对手行动都记在聚合角色 "villain" 上，
+	// 所以这笔账要记在 ActorVillain 这个键上，而不是位置键
+	LegacyVillainPosition string
 }
 
 // IsZero 这手牌没有记录任何盲注。底池文案与计算都靠它决定要不要带上盲注口径
@@ -50,6 +56,9 @@ func (b BlindConfig) PreflopPotBB() float64 {
 //
 // 认不出身份的盲注（例如大盲是"其他人"里的某一位）不返回：凭空挂到某个行动者名下
 // 等于替一个没记录的人下注。它仍会通过 PreflopPotBB 进底池，只是不再参与差额计算。
+//
+// 返回的键是**行动记录里的 actor 值**：我固定是 "hero"，对手是位置（M7.1 起），
+// 老手牌则是聚合角色 "villain"。键对不上就等于没记账，所以两边必须一起改。
 func (b BlindConfig) PostedBlinds() map[string]float64 {
 	posted := make(map[string]float64, 2)
 
@@ -62,7 +71,10 @@ func (b BlindConfig) PostedBlinds() map[string]float64 {
 		}
 	}
 	credit(ActorHero, b.HeroPosition)
-	credit(ActorVillain, b.KeyVillainPosition)
+	for _, position := range b.VillainPositions {
+		credit(position, position)
+	}
+	credit(ActorVillain, b.LegacyVillainPosition)
 
 	return posted
 }

@@ -15,14 +15,16 @@ type ReviewController struct {
 	analysisSvc   *services.ReviewAnalysisService
 	memorySvc     *services.ReviewMemoryService
 	chatSvc       *services.ReviewChatService
+	opponentSvc   *services.OpponentService
 }
 
 func NewReviewController() *ReviewController {
 	return &ReviewController{
-		reviewService: &services.ReviewService{},
+		reviewService: services.NewReviewService(),
 		analysisSvc:   services.NewReviewAnalysisService(),
 		memorySvc:     services.NewReviewMemoryService(),
 		chatSvc:       services.NewReviewChatService(),
+		opponentSvc:   &services.OpponentService{},
 	}
 }
 
@@ -143,6 +145,21 @@ func (c *ReviewController) DeleteHand(ctx *gin.Context) {
 }
 
 // GetLeakTags 获取漏洞标签字典
+// SearchOpponents 搜索我的对手名单（添加对手弹窗的下拉框用）
+func (c *ReviewController) SearchOpponents(ctx *gin.Context) {
+	userID := middleware.GetUserID(ctx)
+	limit, _ := strconv.Atoi(ctx.DefaultQuery("limit", "20"))
+
+	list, err := c.opponentSvc.SearchOpponents(userID, ctx.Query("keyword"), limit)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取对手名单失败: "+err.Error()))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.OpponentListResponse{List: list}))
+}
+
+// GetLeakTags 获取启用的漏洞标签字典
 func (c *ReviewController) GetLeakTags(ctx *gin.Context) {
 	tags, err := c.reviewService.GetLeakTags()
 	if err != nil {

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -91,11 +92,71 @@ type StreetRecord struct {
 	PotStartBB *float64       `json:"potStartBb,omitempty"` // 该街开始时的底池
 }
 
-// VillainInfo 对手信息。v1 只要求标出关键对手
+// VillainInfo 对手信息。
+//
+// M7.1 起每个对手都是具名的实体（M7.1 之前只要求标出关键对手）。两个新字段
+// **必须带 omitempty**：老手牌的 Villains 序列化结果要一字不变，否则
+// ComputeHandHash 会认为内容变了，把已有分析状态重置、还得多花一次模型额度。
 type VillainInfo struct {
 	Position string   `json:"position"`
 	StackBB  *float64 `json:"stackBb,omitempty"`
-	IsKey    bool     `json:"isKey,omitempty"` // 是否为关键对手
+	IsKey    bool     `json:"isKey,omitempty"` // 是否为关键对手，每手最多一个
+	// OpponentID 对手表 id，由后端按 Name 解析后写入，客户端传的值不参与写入
+	OpponentID uint `json:"opponentId,omitempty"`
+	// Name 对手的称呼，进提示词。为空表示 M7.1 之前的老数据（或只记了位置没记名字）
+	Name string `json:"name,omitempty"`
+}
+
+// villainPositions 本手牌记录过的对手位置集合
+func (h *ReviewHand) villainPositions() map[string]bool {
+	positions := make(map[string]bool, len(h.Villains))
+	for i := range h.Villains {
+		if h.Villains[i].Position != "" {
+			positions[h.Villains[i].Position] = true
+		}
+	}
+	return positions
+}
+
+// IsKnownActor 这个 actor 值能不能落到本手牌的某个人头上。
+//
+// M7.1 起对手按位置记录（"CO"），所以位置必须真的在这手牌的对手列表里 ——
+// 否则会存下一份指不到人的行动序列，提示词里也说不清是谁在行动。
+// hero/villain/other 是 M7.1 之前的老数据口径，永久放行（老手牌要能原样编辑保存）。
+func (h *ReviewHand) IsKnownActor(actor string) bool {
+	switch actor {
+	case ActorHero, ActorVillain, ActorOther:
+		return true
+	}
+	return h.villainPositions()[actor]
+}
+
+// NormalizeActor 规范化行动者取值：位置统一成大写（客户端可能传 "co"），
+// hero/villain/other 是小写枚举，不能跟着一起转。
+// 本手牌没有的位置原样返回，交给 IsKnownActor 去报错
+func (h *ReviewHand) NormalizeActor(actor string) string {
+	trimmed := strings.TrimSpace(actor)
+	switch trimmed {
+	case ActorHero, ActorVillain, ActorOther:
+		return trimmed
+	}
+	if upper := strings.ToUpper(trimmed); h.villainPositions()[upper] {
+		return upper
+	}
+	return trimmed
+}
+
+// VillainByPosition 按位置取对手，取不到返回 nil
+func (h *ReviewHand) VillainByPosition(position string) *VillainInfo {
+	if position == "" {
+		return nil
+	}
+	for i := range h.Villains {
+		if h.Villains[i].Position == position {
+			return &h.Villains[i]
+		}
+	}
+	return nil
 }
 
 // ReviewHand 复盘手牌表
@@ -155,7 +216,8 @@ func (ReviewHand) TableName() string {
 // Blinds 取出手牌的盲注配置。
 //
 // 位置一并带上：底池推算要把大小盲认到具体行动者头上，认得出人才能算对跟注差额。
-// 关键对手是 v1 唯一记录了位置的对手，所以只有他能被认出来
+// M7.1 起每个对手都有位置，大小盲是谁一目了然；老手牌只有关键对手有位置，
+// 行为与之前完全一致。
 func (h *ReviewHand) Blinds() BlindConfig {
 	b := BlindConfig{
 		SmallBlindBB: h.SmallBlindBB,
@@ -165,9 +227,18 @@ func (h *ReviewHand) Blinds() BlindConfig {
 		HeroPosition: h.HeroPosition,
 	}
 	for i := range h.Villains {
-		if h.Villains[i].IsKey {
-			b.KeyVillainPosition = h.Villains[i].Position
-			break
+		v := &h.Villains[i]
+		if v.Position == "" {
+			continue
+		}
+		// 有名字的是 M7.1 之后的记录：行动按位置记，账也记在位置上
+		if v.Name != "" {
+			b.VillainPositions = append(b.VillainPositions, v.Position)
+			continue
+		}
+		// 没名字的是老数据：当时行动记在聚合角色 "villain" 上，只认第一个
+		if b.LegacyVillainPosition == "" {
+			b.LegacyVillainPosition = v.Position
 		}
 	}
 	return b

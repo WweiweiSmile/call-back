@@ -24,10 +24,29 @@ var actionNames = map[string]string{
 	models.ActionAllin: "is all-in for",
 }
 
+// actorNames 行动的聚合角色称呼。M7.1 之前所有对手都记在这三个角色上，
+// 新数据里对手按位置记（见 actorLabel），这张表只剩下英雄与老数据的用途
 var actorNames = map[string]string{
 	models.ActorHero:    "Hero",
 	models.ActorVillain: "Villain",
 	models.ActorOther:   "Other",
+}
+
+// actorLabel 行动者在行动序列里的称呼。
+//
+// 能对上本手牌的对手就写成 "老王 (CO)"：同一个人在各条街的行动才好串起来。
+// 对不上的（老数据的 villain/other）退回聚合角色名，绝不凭空编一个名字
+func actorLabel(hand *models.ReviewHand, actor string) string {
+	if villain := hand.VillainByPosition(actor); villain != nil {
+		if villain.Name != "" {
+			return fmt.Sprintf("%s (%s)", villain.Name, villain.Position)
+		}
+		return fmt.Sprintf("Villain (%s)", villain.Position)
+	}
+	if name, ok := actorNames[actor]; ok {
+		return name
+	}
+	return actor
 }
 
 var resultNames = map[string]string{
@@ -159,21 +178,37 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		formatBB(hand.HeroStackBB),
 	)
 
-	var keyVillains, otherVillains int
-	for _, v := range hand.Villains {
-		if v.IsKey {
-			keyVillains++
-			stack := ""
-			if v.StackBB != nil {
-				stack = " " + formatBB(*v.StackBB) + "bb"
-			}
-			fmt.Fprintf(&sb, "Villain (%s)%s  [关键对手]\n", v.Position, stack)
-		} else {
-			otherVillains++
+	// 对手逐个列出，带上名字。名字是 M7.1 加的：有了它模型才能把
+	// "翻前 CO 加注"和"河牌 CO 又下注"认成同一个人，也才说得出"老王在转牌加注"。
+	// 老手牌的对手没有名字，输出与 M7.1 之前逐字一致
+	listed := 0
+	for i := range hand.Villains {
+		v := &hand.Villains[i]
+		// 只有筹码、既没名字也没位置的老数据不列：列出来只会诱导模型猜一个位置
+		if v.Name == "" && v.Position == "" {
+			continue
 		}
+		name := v.Name
+		if name == "" {
+			name = "Villain"
+		}
+		position := v.Position
+		if position == "" {
+			position = "位置未记录"
+		}
+		stack := ""
+		if v.StackBB != nil {
+			stack = " " + formatBB(*v.StackBB) + "bb"
+		}
+		key := ""
+		if v.IsKey {
+			key = "  [关键对手]"
+		}
+		fmt.Fprintf(&sb, "%s (%s)%s%s\n", name, position, stack, key)
+		listed++
 	}
-	// 没标关键对手时退化成只报数量，不能凭空编造对手位置
-	if keyVillains == 0 && hand.VillainCount > 0 {
+	// 一个对手信息都没有时退化成只报数量，不能凭空编造对手位置
+	if listed == 0 && hand.VillainCount > 0 {
 		fmt.Fprintf(&sb, "对手数量: %d 人（未记录具体位置）\n", hand.VillainCount)
 	}
 
@@ -234,7 +269,7 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 
 		parts := make([]string, 0, len(record.Actions))
 		for _, a := range record.Actions {
-			who := actorNames[a.Actor]
+			who := actorLabel(hand, a.Actor)
 			what := actionNames[a.Action]
 			if actionNeedsAmount(a.Action) && a.AmountBB != nil {
 				parts = append(parts, fmt.Sprintf("%s %s %sbb", who, what, formatBB(*a.AmountBB)))

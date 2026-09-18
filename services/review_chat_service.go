@@ -29,7 +29,7 @@ type ReviewChatService struct {
 
 func NewReviewChatService() *ReviewChatService {
 	return &ReviewChatService{
-		reviewService: &ReviewService{},
+		reviewService: NewReviewService(),
 		memoryService: NewReviewMemoryService(),
 		aiClient:      NewAIClient(),
 	}

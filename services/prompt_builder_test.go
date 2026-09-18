@@ -70,6 +70,57 @@ func TestBuildHandBlockTableSizeZeroFallsBack(t *testing.T) {
 	}
 }
 
+// M7.1：对手要有名字。同一个人在各条街的行动必须写成同一个称呼，
+// 否则模型会把"翻前 CO 加注"和"河牌 CO 又下注"当成两个人
+func TestBuildHandBlockNamesVillains(t *testing.T) {
+	hand := handWithTableSize(9)
+	hand.Villains = []models.VillainInfo{
+		{Position: models.PositionCO, Name: "老王", IsKey: true},
+		{Position: models.PositionSB, Name: "小李"},
+	}
+	hand.Streets = []models.StreetRecord{
+		{Street: models.StreetPreflop, Actions: []models.StreetAction{
+			{Actor: models.PositionCO, Action: models.ActionRaise, AmountBB: bbPtr(2.5)},
+			{Actor: models.PositionSB, Action: models.ActionFold},
+			{Actor: models.ActorHero, Action: models.ActionCall},
+		}},
+	}
+
+	block := BuildHandBlock(hand)
+	if !strings.Contains(block, "老王 (CO)  [关键对手]") {
+		t.Errorf("对手块应带名字与位置，实际:\n%s", block)
+	}
+	if !strings.Contains(block, "小李 (SB)") {
+		t.Errorf("非关键对手也要列出名字，实际:\n%s", block)
+	}
+	if !strings.Contains(block, "老王 (CO) raises to 2.5bb") {
+		t.Errorf("行动序列里的对手应写成「名字 (位置)」，实际:\n%s", block)
+	}
+	if !strings.Contains(block, "小李 (SB) folds") {
+		t.Errorf("弃牌也要指名道姓，实际:\n%s", block)
+	}
+}
+
+// 老手牌（对手没有名字）的输出必须与 M7.1 之前逐字一致：
+// 老结论是在那套写法下得出的，换了写法就没有可比性
+func TestBuildHandBlockLegacyVillainOutputUnchanged(t *testing.T) {
+	hand := handWithTableSize(9)
+	hand.Villains = []models.VillainInfo{{Position: models.PositionBB, StackBB: bbPtr(100), IsKey: true}}
+	hand.Streets = []models.StreetRecord{
+		{Street: models.StreetPreflop, Actions: []models.StreetAction{
+			{Actor: models.ActorVillain, Action: models.ActionCall},
+		}},
+	}
+
+	block := BuildHandBlock(hand)
+	if !strings.Contains(block, "Villain (BB) 100bb  [关键对手]") {
+		t.Errorf("老数据的对手行应与 M7.1 之前一致，实际:\n%s", block)
+	}
+	if !strings.Contains(block, "Villain calls") {
+		t.Errorf("老数据的行动仍应写成聚合角色 Villain，实际:\n%s", block)
+	}
+}
+
 // 系统提示词要告诉模型位置随人数变化，否则它拿到「6人桌 + UTG」还是会按满员桌判
 func TestSystemPromptMentionsTableSize(t *testing.T) {
 	prompt := BuildSystemPrompt(nil)

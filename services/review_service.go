@@ -22,7 +22,22 @@ type ReviewHandFilter struct {
 	PageSize      int
 }
 
-type ReviewService struct{}
+type ReviewService struct {
+	opponentSvc *OpponentService
+}
+
+// NewReviewService 构造函数。
+// 用 &ReviewService{} 也行，但那样 opponentSvc 是 nil，解析对手名时才会炸，
+// 统一走这里更省心
+func NewReviewService() *ReviewService {
+	return &ReviewService{opponentSvc: &OpponentService{}}
+}
+
+// resolveOpponents 把手牌里的对手名解析成对手表 id（没有就建）。
+// 必须在 ValidateReviewHand 之后调用：名字不合法时不该先在对手表里留下一行
+func (s *ReviewService) resolveOpponents(userID uint, hand *models.ReviewHand) error {
+	return s.opponentSvc.ResolveOpponents(userID, hand.Villains)
+}
 
 // CreateHand 创建复盘手牌
 func (s *ReviewService) CreateHand(userID uint, req *dto.ReviewHandRequest) (*models.ReviewHand, error) {
@@ -37,6 +52,12 @@ func (s *ReviewService) CreateHand(userID uint, req *dto.ReviewHandRequest) (*mo
 	}
 
 	if err := s.checkGameAccessible(userID, hand.GameID); err != nil {
+		return nil, err
+	}
+
+	// 对手名先落成对手表的记录，再算指纹：OpponentID 也在指纹里，
+	// 顺序反了会写下一份与指纹不符的数据
+	if err := s.resolveOpponents(userID, hand); err != nil {
 		return nil, err
 	}
 
@@ -152,6 +173,11 @@ func (s *ReviewService) UpdateHand(userID, handID uint, req *dto.ReviewHandReque
 		return nil, err
 	}
 	if err := s.checkGameAccessible(userID, hand.GameID); err != nil {
+		return nil, err
+	}
+
+	// 与 CreateHand 同理：先解析对手名再算指纹
+	if err := s.resolveOpponents(userID, hand); err != nil {
 		return nil, err
 	}
 

@@ -24,7 +24,7 @@ type ReviewAnalysisService struct {
 
 func NewReviewAnalysisService() *ReviewAnalysisService {
 	return &ReviewAnalysisService{
-		reviewService: &ReviewService{},
+		reviewService: NewReviewService(),
 		aiClient:      NewAIClient(),
 		memoryService: NewReviewMemoryService(),
 		suggestionSvc: &TagSuggestionService{},

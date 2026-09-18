@@ -66,6 +66,20 @@ type ReviewHandListResponse struct {
 	List  []ReviewHandResponse `json:"list"`
 }
 
+// OpponentResponse 对手名单项
+type OpponentResponse struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+	// HandCount 与该对手有关的已复盘手牌数，用于在下拉里区分重名（"老王 · 3 手"）。
+	// 只统计 M7.1 之后录入手牌，老手牌认不出对手，数字偏小是预期内的
+	HandCount int64 `json:"handCount"`
+}
+
+// OpponentListResponse 对手名单响应
+type OpponentListResponse struct {
+	List []OpponentResponse `json:"list"`
+}
+
 // ReviewLeakTagResponse 漏洞标签响应
 type ReviewLeakTagResponse struct {
 	Code        string `json:"code"`

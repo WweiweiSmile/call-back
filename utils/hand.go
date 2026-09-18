@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // 合法点数与花色
@@ -73,10 +74,19 @@ var validActions = map[string]bool{
 	models.ActionAllin: true,
 }
 
-var validActors = map[string]bool{
-	models.ActorHero:    true,
-	models.ActorVillain: true,
-	models.ActorOther:   true,
+// sanitizeOpponentName 清洗对手名：去首尾空白、把连续空白折成一个空格、去掉控制字符。
+// 名字会进提示词，换行与控制字符既能搅乱提示词排版，也是注入的载体
+func sanitizeOpponentName(name string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name)
+	return strings.Join(strings.Fields(cleaned), " ")
 }
 
 var validResults = map[string]bool{
@@ -238,16 +248,58 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 			h.HeroPosition, h.TableSize, strings.Join(PositionsForTableSize(h.TableSize), "/"))
 	}
 
-	// 对手位置跟手牌共用同一套词表。空位置放行：v1 允许只记对手数量不记位置
+	// --- 对手 ---
+	// 位置既要合法，也不能两个人坐同一个位置、更不能跟我撞位。
+	// 空位置放行：M7.1 之前的老手牌允许只记对手数量不记位置
+	seenPositions := make(map[string]bool, len(h.Villains))
+	keyVillainCount := 0
 	for i := range h.Villains {
-		h.Villains[i].Position = strings.ToUpper(strings.TrimSpace(h.Villains[i].Position))
-		if h.Villains[i].Position == "" {
+		v := &h.Villains[i]
+		v.Position = strings.ToUpper(strings.TrimSpace(v.Position))
+		v.Name = sanitizeOpponentName(v.Name)
+		// 对手表 id 由服务层按名字解析后写入，客户端传什么都不采信：
+		// 采信就等于允许引用别人的对手
+		v.OpponentID = 0
+
+		if len([]rune(v.Name)) > models.OpponentNameMaxRunes {
+			return fmt.Errorf("对手名字不能超过 %d 个字", models.OpponentNameMaxRunes)
+		}
+		// 名字必须坐在一个位置上，否则提示词里指不到人 —— "老王 加注"说不清是哪个老王。
+		// 反过来不强制：老数据的对手没有名字，强制会让老手牌一编辑就报错
+		if v.Name != "" && v.Position == "" {
+			return fmt.Errorf("对手「%s」没有位置", v.Name)
+		}
+		if v.Position == "" {
 			continue
 		}
-		if !isValidPosition(h.Villains[i].Position, h.TableSize) {
+		if !isValidPosition(v.Position, h.TableSize) {
 			return fmt.Errorf("对手位置无效：%s（%d 人桌可选 %s）",
-				h.Villains[i].Position, h.TableSize, strings.Join(PositionsForTableSize(h.TableSize), "/"))
+				v.Position, h.TableSize, strings.Join(PositionsForTableSize(h.TableSize), "/"))
 		}
+		if v.Position == h.HeroPosition {
+			return fmt.Errorf("对手位置不能和我相同：%s", v.Position)
+		}
+		if seenPositions[v.Position] {
+			return fmt.Errorf("对手位置重复：%s", v.Position)
+		}
+		seenPositions[v.Position] = true
+
+		if v.IsKey {
+			keyVillainCount++
+		}
+	}
+	// 关键对手是给提示词与画像用的"主要对手"，多过一个就失去意义了
+	if keyVillainCount > 1 {
+		return fmt.Errorf("关键对手只能有一个")
+	}
+	// 没填对手数量时按对手列表补上（脚本或第三方调用建的请求）。
+	// 填了就不动：老手牌的"对手数量"是当时手填的，与列表长度不是一回事
+	if h.VillainCount == 0 && len(h.Villains) > 0 {
+		h.VillainCount = len(h.Villains)
+	}
+	// 我占一个位置，对手最多坐到剩下的位置
+	if len(h.Villains) > h.TableSize-1 {
+		return fmt.Errorf("%d 人桌最多记录 %d 个对手", h.TableSize, h.TableSize-1)
 	}
 
 	if h.Result == "" {
@@ -299,8 +351,12 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 
 		for j := range street.Actions {
 			action := &street.Actions[j]
-			if !validActors[action.Actor] {
-				return fmt.Errorf("无效的行动者：%s", action.Actor)
+			// 行动者要么是老口径的聚合角色，要么是本手牌真的记录过的对手位置。
+			// 拿一个本手牌里不存在的位置（比如 6 人桌写了 UTG+2、或者对手已被删掉）
+			// 在这里就拦下，不至于存下一份指不到人的行动序列
+			action.Actor = h.NormalizeActor(action.Actor)
+			if !h.IsKnownActor(action.Actor) {
+				return fmt.Errorf("无效的行动者：%s（本手牌没有这个位置）", action.Actor)
 			}
 			if !validActions[action.Action] {
 				return fmt.Errorf("无效的行动：%s", action.Action)

@@ -94,6 +94,43 @@ func TestValidateReviewHand_RejectsBadInput(t *testing.T) {
 			h.HeroPosition = models.PositionBTN
 			h.Villains = []models.VillainInfo{{Position: models.PositionUTG2, IsKey: true}}
 		}},
+		{"对手位置重复", func(h *models.ReviewHand) {
+			h.Villains = []models.VillainInfo{
+				{Position: models.PositionCO, Name: "老王"},
+				{Position: models.PositionCO, Name: "小李"},
+			}
+		}},
+		{"对手位置与我相同", func(h *models.ReviewHand) {
+			h.Villains = []models.VillainInfo{{Position: models.PositionBTN, Name: "老王"}}
+		}},
+		{"关键对手多于一个", func(h *models.ReviewHand) {
+			h.Villains = []models.VillainInfo{
+				{Position: models.PositionCO, Name: "老王", IsKey: true},
+				{Position: models.PositionSB, Name: "小李", IsKey: true},
+			}
+		}},
+		// 位置互不重复时对手数天然不会超（我占一个位置），这条实际挡的是
+		// 只记了数量、没记位置的老数据
+		{"对手数超出人数", func(h *models.ReviewHand) {
+			h.TableSize = 2
+			h.HeroPosition = models.PositionSB
+			h.Villains = []models.VillainInfo{{StackBB: bb(100)}, {StackBB: bb(100)}}
+		}},
+		{"对手名字过长", func(h *models.ReviewHand) {
+			long := make([]rune, models.OpponentNameMaxRunes+1)
+			for i := range long {
+				long[i] = '王'
+			}
+			h.Villains = []models.VillainInfo{{Position: models.PositionCO, Name: string(long)}}
+		}},
+		// 名字必须坐在一个位置上，否则提示词里指不到人
+		{"有名字的对手没有位置", func(h *models.ReviewHand) {
+			h.Villains = []models.VillainInfo{{Name: "老王"}}
+		}},
+		// 位置写了但他不在这手牌的对手列表里：行动序列会指不到人
+		{"行动者指向未记录的对手位置", func(h *models.ReviewHand) {
+			h.Streets[0].Actions[1].Actor = models.PositionCO
+		}},
 		{"非法结果", func(h *models.ReviewHand) { h.Result = "draw" }},
 		{"负筹码", func(h *models.ReviewHand) { h.HeroStackBB = -1 }},
 		{"非法街道", func(h *models.ReviewHand) { h.Streets[0].Street = "flopp" }},
@@ -127,6 +164,54 @@ func TestValidateReviewHand_AllowsNoBoard(t *testing.T) {
 	h.Streets = h.Streets[:1]
 	if err := ValidateReviewHand(h); err != nil {
 		t.Fatalf("无公共牌的手牌应合法，实际: %v", err)
+	}
+}
+
+// M7.1：具名对手 + 按位置记录的行动要能通过，且名字要被清洗、对手表 id 要被清零
+func TestValidateReviewHand_AcceptsNamedVillains(t *testing.T) {
+	h := validHand()
+	h.Villains = []models.VillainInfo{
+		{Position: models.PositionCO, Name: "  老\n王 ", IsKey: true, OpponentID: 999},
+		{Position: models.PositionSB, Name: "小李"},
+	}
+	h.VillainCount = 2
+	h.Streets = []models.StreetRecord{
+		{Street: models.StreetPreflop, Actions: []models.StreetAction{
+			{Actor: models.PositionCO, Action: models.ActionRaise, AmountBB: bb(2.5)},
+			{Actor: models.PositionSB, Action: models.ActionFold},
+			{Actor: models.ActorHero, Action: models.ActionCall},
+		}},
+	}
+
+	if err := ValidateReviewHand(h); err != nil {
+		t.Fatalf("具名对手的手牌应合法，实际: %v", err)
+	}
+	if h.Villains[0].Name != "老 王" {
+		t.Errorf("对手名应去掉控制字符并折叠空白，实际 %q", h.Villains[0].Name)
+	}
+	// 对手表 id 只能由服务层按名字解析，客户端传什么都不采信
+	if h.Villains[0].OpponentID != 0 {
+		t.Errorf("客户端传来的 OpponentID 应被清零，实际 %d", h.Villains[0].OpponentID)
+	}
+
+	// 小写位置会被规范成大写，不至于因为大小写就报"没有这个位置"
+	lower := validHand()
+	lower.Villains = []models.VillainInfo{{Position: models.PositionCO, Name: "老王"}}
+	lower.Streets[0].Actions[1].Actor = "co"
+	if err := ValidateReviewHand(lower); err != nil {
+		t.Fatalf("小写位置应被规范化，实际: %v", err)
+	}
+	if lower.Streets[0].Actions[1].Actor != models.PositionCO {
+		t.Errorf("行动者应规范成大写位置，实际 %q", lower.Streets[0].Actions[1].Actor)
+	}
+}
+
+// 老手牌：对手没名字、行动记在聚合角色上，必须原样编辑再保存也不报错
+func TestValidateReviewHand_AcceptsLegacyVillains(t *testing.T) {
+	h := validHand()
+	h.Villains = []models.VillainInfo{{Position: models.PositionBB, IsKey: true}}
+	if err := ValidateReviewHand(h); err != nil {
+		t.Fatalf("老数据的对手（无名字）应合法，实际: %v", err)
 	}
 }
 
