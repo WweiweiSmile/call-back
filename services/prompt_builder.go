@@ -181,7 +181,20 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		fmt.Fprintf(&sb, "盲注级别: %s\n", hand.Stakes)
 	}
 
-	pots := utils.ComputeStreetPots(hand.Streets)
+	// 盲注与前注必须单独说明，不能只靠底池数字体现：模型看到 Preflop 的底池是 1.5bb
+	// 时得知道那是死钱而不是谁下的注，否则会把翻前的第一个动作理解错。
+	// 前注标明"每人一份"以及总人数，模型才能自己核对总额
+	blinds := hand.Blinds()
+	if !blinds.IsZero() {
+		fmt.Fprintf(&sb, "盲注: 小盲 %sbb / 大盲 %sbb", formatBB(blinds.SmallBlindBB), formatBB(blinds.BigBlindBB))
+		if blinds.AnteBB > 0 {
+			fmt.Fprintf(&sb, " / 前注 %sbb（每人一份，%d 人共 %sbb）",
+				formatBB(blinds.AnteBB), blinds.TableSize, formatBB(blinds.AnteBB*float64(blinds.TableSize)))
+		}
+		sb.WriteString("（翻前底池已含这部分死钱，行动序列里不再重复记录）\n")
+	}
+
+	pots := utils.ComputeStreetPots(hand.Streets, blinds)
 	boardCards := parseCards(hand.Board)
 
 	for _, street := range []string{models.StreetPreflop, models.StreetFlop, models.StreetTurn, models.StreetRiver} {
@@ -233,9 +246,14 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		fmt.Fprintf(&sb, "%s: %s\n", line, strings.Join(parts, ", "))
 	}
 
-	// 最终底池帮助模型理解这手牌的体量
+	// 最终底池帮助模型理解这手牌的体量。
+	// 口径必须如实写出来：没记盲注时说"含盲注"会让模型高估底池，反之亦然
 	if step, ok := pots[models.StreetRiver]; ok && step.PotEndBB > 0 {
-		fmt.Fprintf(&sb, "最终底池约 %.1fbb（估算，未含盲注）\n", step.PotEndBB)
+		note := "（估算，未记录盲注与前注）"
+		if !blinds.IsZero() {
+			note = "（估算，已含盲注与前注）"
+		}
+		fmt.Fprintf(&sb, "最终底池约 %.1fbb%s\n", step.PotEndBB, note)
 	}
 
 	if hand.Result != models.ResultUnknown {

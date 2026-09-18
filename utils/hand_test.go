@@ -319,3 +319,84 @@ func TestCheckGameAccessibleIgnoresNil(t *testing.T) {
 	}
 	_ = ptrUint(1)
 }
+
+// 盲注校验是手牌录入与用户默认设置共用的口径，两处必须给出同样的结论。
+// 反过来也一样：设置页存得进去的值，录入手牌时不能拒收
+func TestValidateBlinds(t *testing.T) {
+	cases := []struct {
+		name                       string
+		smallBlind, bigBlind, ante float64
+		wantErr                    bool
+	}{
+		{"全为0表示没记录", 0, 0, 0, false},
+		{"常规1/2级别", 0.5, 1, 0, false},
+		{"带前注", 0.5, 1, 1, false},
+		{"小盲等于大盲", 1, 1, 0, false},
+		{"小盲，没有大盲", 0.5, 0, 0, true},
+		{"前注，没有大盲", 0, 0, 1, true},
+		{"小盲大于大盲", 2, 1, 0, true},
+		{"小盲为负", -0.5, 1, 0, true},
+		{"大盲为负", 0.5, -1, 0, true},
+		{"前注为负", 0.5, 1, -0.1, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateBlinds(tc.smallBlind, tc.bigBlind, tc.ante)
+			if tc.wantErr && err == nil {
+				t.Errorf("小盲%v 大盲%v 前注%v 应被拒收", tc.smallBlind, tc.bigBlind, tc.ante)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("小盲%v 大盲%v 前注%v 应通过，实际: %v", tc.smallBlind, tc.bigBlind, tc.ante, err)
+			}
+		})
+	}
+}
+
+// 盲注进了底池与提示词，就必须进内容指纹。
+// 漏掉的话，用户改了盲注额度不会触发重新分析，旧结论会一直挂着
+func TestComputeHandHashCoversBlinds(t *testing.T) {
+	base := validHand()
+	baseHash := ComputeHandHash(base)
+
+	h := validHand()
+	h.SmallBlindBB = 0.5
+	h.BigBlindBB = 1
+	if ComputeHandHash(h) == baseHash {
+		t.Error("改小盲/大盲后指纹必须变化")
+	}
+
+	h = validHand()
+	h.AnteBB = 1
+	if ComputeHandHash(h) == baseHash {
+		t.Error("改前注后指纹必须变化")
+	}
+
+	// 反过来：完全相同的盲注必须得到相同的指纹，否则会白花一次模型调用
+	a := validHand()
+	a.SmallBlindBB, a.BigBlindBB, a.AnteBB = 0.5, 1, 0.2
+	b := validHand()
+	b.SmallBlindBB, b.BigBlindBB, b.AnteBB = 0.5, 1, 0.2
+	if ComputeHandHash(a) != ComputeHandHash(b) {
+		t.Error("盲注相同时指纹应一致")
+	}
+}
+
+// 校验不通过时手牌不该被写库：小盲大于大盲这类自相矛盾的记录
+// 会让底池推算得出比大盲还小的死钱
+func TestValidateReviewHandRejectsBadBlinds(t *testing.T) {
+	h := validHand()
+	h.SmallBlindBB = 2
+	h.BigBlindBB = 1
+	if err := ValidateReviewHand(h); err == nil {
+		t.Error("小盲大于大盲的手牌应被拒收")
+	}
+
+	h = validHand()
+	h.SmallBlindBB = 0.5
+	h.BigBlindBB = 1
+	h.AnteBB = 0.2
+	if err := ValidateReviewHand(h); err != nil {
+		t.Errorf("合法盲注应通过，实际: %v", err)
+	}
+}

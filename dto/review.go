@@ -10,13 +10,17 @@ import (
 // 创建与更新共用：更新是整体替换语义 —— 前端提交的永远是一份完整表单，
 // 做部分更新反而要处理"字段没传"和"字段传了空值"的区分，得不偿失。
 type ReviewHandRequest struct {
-	GameID       *uint                 `json:"gameId"`
-	Title        string                `json:"title"`
-	TableSize    int                   `json:"tableSize"`
-	HeroPosition string                `json:"heroPosition" binding:"required"`
-	HeroCards    string                `json:"heroCards" binding:"required"`
-	HeroStackBB  float64               `json:"heroStackBb"`
-	Stakes       string                `json:"stakes"`
+	GameID       *uint   `json:"gameId"`
+	Title        string  `json:"title"`
+	TableSize    int     `json:"tableSize"`
+	HeroPosition string  `json:"heroPosition" binding:"required"`
+	HeroCards    string  `json:"heroCards" binding:"required"`
+	HeroStackBB  float64 `json:"heroStackBb"`
+	Stakes       string  `json:"stakes"`
+	// 盲注与前注（BB）。三项都是 0 表示没记录，底池按不含盲注的老口径估算
+	SmallBlindBB float64               `json:"smallBlindBb"`
+	BigBlindBB   float64               `json:"bigBlindBb"`
+	AnteBB       float64               `json:"anteBb"`
 	Board        string                `json:"board"`
 	VillainCount int                   `json:"villainCount"`
 	Villains     []models.VillainInfo  `json:"villains"`
@@ -39,6 +43,9 @@ type ReviewHandResponse struct {
 	HeroCards     string                `json:"heroCards"`
 	HeroStackBB   float64               `json:"heroStackBb"`
 	Stakes        string                `json:"stakes"`
+	SmallBlindBB  float64               `json:"smallBlindBb"`
+	BigBlindBB    float64               `json:"bigBlindBb"`
+	AnteBB        float64               `json:"anteBb"`
 	Board         string                `json:"board"`
 	VillainCount  int                   `json:"villainCount"`
 	Villains      []models.VillainInfo  `json:"villains"`
@@ -100,6 +107,9 @@ func ToReviewHandResponse(hand *models.ReviewHand, gameName string) ReviewHandRe
 		HeroCards:     hand.HeroCards,
 		HeroStackBB:   hand.HeroStackBB,
 		Stakes:        hand.Stakes,
+		SmallBlindBB:  hand.SmallBlindBB,
+		BigBlindBB:    hand.BigBlindBB,
+		AnteBB:        hand.AnteBB,
 		Board:         hand.Board,
 		VillainCount:  hand.VillainCount,
 		Villains:      villains,

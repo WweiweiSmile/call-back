@@ -113,8 +113,16 @@ type ReviewHand struct {
 	HeroCards    string  `json:"heroCards" gorm:"size:8;comment:我的底牌，规范格式如 AsKh"`
 	HeroStackBB  float64 `json:"heroStackBb" gorm:"comment:我的有效筹码(BB)"`
 	Stakes       string  `json:"stakes" gorm:"size:20;comment:盲注级别，如 5/10"`
-	Board        string  `json:"board" gorm:"size:10;comment:公共牌，按发牌顺序拼接如 Qs7h2d3c9s"`
-	VillainCount int     `json:"villainCount" gorm:"comment:对手数量"`
+
+	// 盲注与前注的额度（BB）。单独成列而不是伪造成"对手下注 0.5bb"塞进 Streets：
+	// 那样模型会以为翻前真有人下注，底池推算的中间状态也会被污染。
+	// 三个都是 0 表示没记录，此时底池估算与加这个功能之前完全一致
+	SmallBlindBB float64 `json:"smallBlindBb" gorm:"default:0;comment:小盲(BB)"`
+	BigBlindBB   float64 `json:"bigBlindBb" gorm:"default:0;comment:大盲(BB)"`
+	AnteBB       float64 `json:"anteBb" gorm:"default:0;comment:前注(BB)，每人一份"`
+
+	Board        string `json:"board" gorm:"size:10;comment:公共牌，按发牌顺序拼接如 Qs7h2d3c9s"`
+	VillainCount int    `json:"villainCount" gorm:"comment:对手数量"`
 
 	Villains []VillainInfo `json:"villains" gorm:"serializer:json;type:json;comment:对手信息"`
 
@@ -142,4 +150,25 @@ type ReviewHand struct {
 // TableName 指定表名
 func (ReviewHand) TableName() string {
 	return "review_hands"
+}
+
+// Blinds 取出手牌的盲注配置。
+//
+// 位置一并带上：底池推算要把大小盲认到具体行动者头上，认得出人才能算对跟注差额。
+// 关键对手是 v1 唯一记录了位置的对手，所以只有他能被认出来
+func (h *ReviewHand) Blinds() BlindConfig {
+	b := BlindConfig{
+		SmallBlindBB: h.SmallBlindBB,
+		BigBlindBB:   h.BigBlindBB,
+		AnteBB:       h.AnteBB,
+		TableSize:    h.TableSize,
+		HeroPosition: h.HeroPosition,
+	}
+	for i := range h.Villains {
+		if h.Villains[i].IsKey {
+			b.KeyVillainPosition = h.Villains[i].Position
+			break
+		}
+	}
+	return b
 }

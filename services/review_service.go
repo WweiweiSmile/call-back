@@ -275,6 +275,9 @@ func applyHandRequest(hand *models.ReviewHand, req *dto.ReviewHandRequest) {
 	hand.HeroCards = req.HeroCards
 	hand.HeroStackBB = req.HeroStackBB
 	hand.Stakes = strings.TrimSpace(req.Stakes)
+	hand.SmallBlindBB = req.SmallBlindBB
+	hand.BigBlindBB = req.BigBlindBB
+	hand.AnteBB = req.AnteBB
 	hand.Board = req.Board
 	hand.VillainCount = req.VillainCount
 	hand.Villains = req.Villains

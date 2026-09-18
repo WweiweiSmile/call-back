@@ -159,6 +159,26 @@ func ValidateCards(cards string) error {
 	return nil
 }
 
+// ValidateBlinds 校验盲注与前注额度（BB）。
+//
+// 三个值全为 0 表示"这手牌没记录盲注"，是合法状态 —— 老数据与不想记盲注的用户
+// 都走这条路径，底池估算会退回不含盲注的老口径。
+//
+// 手牌录入与用户默认设置共用这一份校验，免得两处出现不同的口径。
+func ValidateBlinds(smallBlind, bigBlind, ante float64) error {
+	if smallBlind < 0 || bigBlind < 0 || ante < 0 {
+		return fmt.Errorf("盲注与前注不能为负数")
+	}
+	// 大盲是折算的基准，单独填小盲或前注没有意义
+	if bigBlind == 0 && (smallBlind > 0 || ante > 0) {
+		return fmt.Errorf("填了小盲或前注，就必须填大盲")
+	}
+	if bigBlind > 0 && smallBlind > bigBlind {
+		return fmt.Errorf("小盲不能大于大盲")
+	}
+	return nil
+}
+
 // ValidateReviewHand 校验并就地规范化手牌。
 // 校验不通过时返回中文错误，可直接透给前端展示。
 func ValidateReviewHand(h *models.ReviewHand) error {
@@ -254,6 +274,12 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 	}
 	if h.VillainCount < 0 {
 		return fmt.Errorf("对手数量不能为负数")
+	}
+
+	// 盲注要放在人数归一化之后校验：前注的总额按人数折算，
+	// 人数为 0 时折算出来是 0，会把"没记录"和"前注为 0"混成一回事
+	if err := ValidateBlinds(h.SmallBlindBB, h.BigBlindBB, h.AnteBB); err != nil {
+		return err
 	}
 
 	// --- 行动序列 ---
@@ -353,6 +379,9 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		HeroCards    string                `json:"heroCards"`
 		HeroStackBB  float64               `json:"heroStackBb"`
 		Stakes       string                `json:"stakes"`
+		SmallBlindBB float64               `json:"smallBlindBb"`
+		BigBlindBB   float64               `json:"bigBlindBb"`
+		AnteBB       float64               `json:"anteBb"`
 		Board        string                `json:"board"`
 		VillainCount int                   `json:"villainCount"`
 		Villains     []models.VillainInfo  `json:"villains"`
@@ -367,6 +396,9 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		HeroCards:    h.HeroCards,
 		HeroStackBB:  h.HeroStackBB,
 		Stakes:       h.Stakes,
+		SmallBlindBB: h.SmallBlindBB,
+		BigBlindBB:   h.BigBlindBB,
+		AnteBB:       h.AnteBB,
 		Board:        h.Board,
 		VillainCount: h.VillainCount,
 		Villains:     h.Villains,

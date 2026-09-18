@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS review_hands (
     hero_cards VARCHAR(8) COMMENT '我的底牌，规范格式如 AsKh',
     hero_stack_bb DOUBLE DEFAULT 0 COMMENT '我的有效筹码(BB)',
     stakes VARCHAR(20) COMMENT '盲注级别，如 5/10',
+    small_blind_bb DOUBLE DEFAULT 0 COMMENT '小盲(BB)，0 表示未记录',
+    big_blind_bb DOUBLE DEFAULT 0 COMMENT '大盲(BB)，0 表示未记录',
+    ante_bb DOUBLE DEFAULT 0 COMMENT '前注(BB)，每人一份',
     board VARCHAR(10) COMMENT '公共牌，按发牌顺序拼接如 Qs7h2d3c9s',
     villain_count INT DEFAULT 0 COMMENT '对手数量',
     villains JSON COMMENT '对手信息 [{position, stackBb, isKey}]',
@@ -197,8 +200,23 @@ CREATE TABLE IF NOT EXISTS review_messages (
     INDEX idx_message_analysis_id (analysis_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复盘追问对话表';
 
+-- 用户默认设置表
+-- 目前只有复盘录入用的盲注默认值。单独成表而不是往 users 加列：
+-- users 是鉴权链路的表，往上堆业务偏好会让每次读用户信息都多带一堆字段。
+-- 没设置过的用户不会在这里有行，接口按默认值兜底（见 PreferenceService.Get）
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '归属用户，数据隔离依据',
+    small_blind_bb DOUBLE DEFAULT 0.5 COMMENT '默认小盲(BB)',
+    big_blind_bb DOUBLE DEFAULT 1 COMMENT '默认大盲(BB)',
+    ante_bb DOUBLE DEFAULT 0 COMMENT '默认前注(BB)，每人一份',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE INDEX idx_up_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户默认设置表';
+
 -- 插入测试用户
-INSERT INTO users (username, nickname, status) VALUES 
+INSERT INTO users (username, nickname, status) VALUES
 ('testuser1', '测试用户1', 'active'),
 ('testuser2', '测试用户2', 'active'),
 ('testuser3', '测试用户3', 'active');
