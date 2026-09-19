@@ -16,8 +16,6 @@ const (
 	ChatMessageMaxRunes = 1000
 	// ChatHistoryLimit 拼进提示词的历史条数上限，防止上下文随对话无限增长
 	ChatHistoryLimit = 20
-	// ChatMaxTokens 助手回复长度上限。要求 300 字以内，600 token 留有余量
-	ChatMaxTokens = 600
 )
 
 // ReviewChatService 追问对话：基于已有的分析结论回答学员的问题
@@ -87,7 +85,10 @@ func (s *ReviewChatService) Ask(
 	memory := s.memoryService.BuildMemoryContext(userID)
 	system, userPrompt := BuildChatPrompt(hand, analysis, memory, history)
 
-	completion, err := s.aiClient.Complete(ctx, *settings, system, userPrompt, ChatMaxTokens)
+	// 回复长度由提示词里的「300 字以内」约束（BuildChatPrompt）。
+	// 曾经还在这一层压了 600 token 的 max_tokens，用 K3 时会被推理轨迹吃光、
+	// 返回空内容，所以撤掉了；代价是模型偶尔写长时没有代码兜底
+	completion, err := s.aiClient.Complete(ctx, *settings, system, userPrompt)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -31,8 +31,6 @@ type Config struct {
 	// 时看到的预填值就是它们
 	DeepSeekBaseURL string
 	DeepSeekModel   string
-	// AITimeoutSec 单次分析超时。模型返回结构化 JSON 通常 20~60 秒
-	AITimeoutSec int
 	// AIDailyLimit 单用户每日分析次数上限，防止额度被刷爆。
 	// 不区分用的是谁的 Key —— 卡的是"这个账号一天能发起多少次分析"
 	AIDailyLimit int
@@ -66,7 +64,6 @@ func LoadConfig() error {
 		DeepSeekAPIKey:  apiKey,
 		DeepSeekBaseURL: GetEnv("DEEPSEEK_BASE_URL", DefaultAIBaseURL),
 		DeepSeekModel:   GetEnv("DEEPSEEK_MODEL", DefaultAIModel),
-		AITimeoutSec:    GetEnvInt("AI_TIMEOUT_SECONDS", defaultAITimeoutSec),
 		AIDailyLimit:    GetEnvInt("AI_DAILY_LIMIT", defaultAIDailyLimit),
 		AIEnabled:       apiKey != "",
 	}
@@ -75,6 +72,11 @@ func LoadConfig() error {
 	log.Printf("AI 分析使用用户自备 Key；默认预设 %s / %s", preset.BaseURL, preset.Model)
 	if apiKey != "" {
 		log.Println("Warning: DEEPSEEK_API_KEY 已废弃，自 BYOK 起不再对任何用户生效（Key 现在按用户存在 user_preferences 里）")
+	}
+	// 只提示，不读值：AI 调用不再设超时（K3 这类「始终推理」模型一次分析要几分钟，
+	// 掐断等于把已经烧掉的推理 token 白白扔掉）。留着这行会让运维误以为它还能调
+	if GetEnv("AI_TIMEOUT_SECONDS", "") != "" {
+		log.Println("Warning: AI_TIMEOUT_SECONDS 已废弃，AI 调用不再设超时，这行可以从 .env 里删掉")
 	}
 
 	log.Println("Config loaded successfully")

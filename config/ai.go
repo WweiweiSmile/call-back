@@ -1,7 +1,6 @@
 package config
 
 const (
-	defaultAITimeoutSec = 120
 	defaultAIDailyLimit = 30
 
 	// DefaultAIBaseURL / DefaultAIModel 默认预设的兜底值。
@@ -14,9 +13,11 @@ const (
 //
 // 凭据与模型名自 BYOK 起按用户解析，不在这个结构里 ——
 // 它们来自 user_preferences，由 services.AISettingService.ResolveCallSettings 给出
+//
+// 刻意没有"单次调用超时"这一项：K3 这类「始终推理」模型的思考时间不受我们控制，
+// 一次分析可能要几分钟，掐断只会把已经烧掉的推理 token 白白扔掉。
+// 详见 services/ai_client.go 里关于不设超时的说明
 type AISettings struct {
-	// TimeoutSec 单次模型调用超时
-	TimeoutSec int
 	// DailyLimit 单用户每日分析次数上限
 	DailyLimit int
 }
@@ -27,19 +28,15 @@ type AISettings struct {
 // 一套默认值 —— 否则任何在 LoadConfig 之前构造的组件（比如只注册路由的
 // 单测）都会 nil 解引用崩溃。
 func AIConfig() AISettings {
-	timeout := defaultAITimeoutSec
 	limit := defaultAIDailyLimit
 
 	if AppConfig != nil {
-		if AppConfig.AITimeoutSec > 0 {
-			timeout = AppConfig.AITimeoutSec
-		}
 		if AppConfig.AIDailyLimit > 0 {
 			limit = AppConfig.AIDailyLimit
 		}
 	}
 
-	return AISettings{TimeoutSec: timeout, DailyLimit: limit}
+	return AISettings{DailyLimit: limit}
 }
 
 // AIPreset 一个预设供应商，供设置页一键填充

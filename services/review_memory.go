@@ -529,8 +529,10 @@ func (s *ReviewMemoryService) RewriteSummary(ctx context.Context, userID uint) (
 		return nil, err
 	}
 
-	// 500 字中文留 800 token 足够。给太多会让模型忍不住写长
-	completion, err := s.aiClient.Complete(ctx, *settings, system, user, 800)
+	// 不再压 max_tokens：用 K3 时推理轨迹会把它吃光、返回空内容。
+	// 长度靠两道后置约束兜住 —— 提示词里的「不超过 500 字」，
+	// 以及下面 truncateRunes 的硬截断，超出部分不会进库
+	completion, err := s.aiClient.Complete(ctx, *settings, system, user)
 	if err != nil {
 		return nil, err
 	}

@@ -18,34 +18,28 @@ func TestAIConfigNilSafe(t *testing.T) {
 	withAppConfig(t, nil)
 
 	got := AIConfig()
-	if got.TimeoutSec != defaultAITimeoutSec {
-		t.Errorf("TimeoutSec = %d, 期望 %d", got.TimeoutSec, defaultAITimeoutSec)
-	}
 	if got.DailyLimit != defaultAIDailyLimit {
 		t.Errorf("DailyLimit = %d, 期望 %d", got.DailyLimit, defaultAIDailyLimit)
 	}
 }
 
 // TestAIConfigIgnoresNonPositive 非法（<=0）的值要退回默认，
-// 免得一个手滑的 0 让每次调用都立刻超时
+// 免得一个手滑的 0 让每日额度变成"一次都不许用"
 func TestAIConfigIgnoresNonPositive(t *testing.T) {
-	withAppConfig(t, &Config{AITimeoutSec: 0, AIDailyLimit: -1})
+	withAppConfig(t, &Config{AIDailyLimit: -1})
 
 	got := AIConfig()
-	if got.TimeoutSec != defaultAITimeoutSec {
-		t.Errorf("TimeoutSec = %d, 期望退回默认 %d", got.TimeoutSec, defaultAITimeoutSec)
-	}
 	if got.DailyLimit != defaultAIDailyLimit {
 		t.Errorf("DailyLimit = %d, 期望退回默认 %d", got.DailyLimit, defaultAIDailyLimit)
 	}
 }
 
 func TestAIConfigReadsAppConfig(t *testing.T) {
-	withAppConfig(t, &Config{AITimeoutSec: 60, AIDailyLimit: 5})
+	withAppConfig(t, &Config{AIDailyLimit: 5})
 
 	got := AIConfig()
-	if got.TimeoutSec != 60 || got.DailyLimit != 5 {
-		t.Errorf("AIConfig() = %+v, 期望 {60 5}", got)
+	if got.DailyLimit != 5 {
+		t.Errorf("AIConfig() = %+v, 期望 {5}", got)
 	}
 }
 

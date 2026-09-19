@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"bytes"
 	"call-go/utils"
 	"context"
@@ -8,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,8 +38,8 @@ type CompletionResult struct {
 // 客户端保持无状态：不碰数据库、不读全局配置。这样它既是纯粹的 HTTP 包装，
 // 也顺手让"每个用户用自己的 Key"这件事只在一个地方决定
 //
-// 刻意不含 TimeoutSec —— 那是服务端参数（config.AIConfig），
-// 假装它按用户而变只会误导
+// 刻意不含任何超时/重试参数 —— 调用时长不是"按用户而变"的东西，
+// 放进这里只会让人以为某个用户能有更长的思考时间
 type AICallSettings struct {
 	APIKey  string
 	BaseURL string
@@ -69,9 +72,13 @@ func NewAIClient() *AIClient {
 
 	return &AIClient{
 		http: &http.Client{
-			// 单次请求的真实超时由 context 控制（调用方按 AITimeoutSec 设置），
-			// 这里给一个宽松上限兜底
-			Timeout: 5 * time.Minute,
+			// 刻意不设 Timeout（0 = 不限）。模型「思考」多久由它自己决定：
+			// K3 这类始终推理的模型一次分析可能跑好几分钟，这里兜一道
+			// 5 分钟的上限，就等于把超时从 context 挪到了客户端，问题原样保留。
+			//
+			// 真正拦住"连不上"的是下面拨号器的 30 秒超时（连不通就报错，
+			// 不会有半开的连接无限挂着），以及各家服务端自己的请求上限
+			Timeout: 0,
 			// 不跟随重定向：一个公网地址 302 到 http://169.254.169.254/ 就绕过了
 			// 保存时的校验。默认的 CheckRedirect 会再走一次 DialContext 从而被拦下，
 			// 但直接不跟随更简单也更严
@@ -130,13 +137,30 @@ func guardedDialContext(ctx context.Context, network, addr string) (net.Conn, er
 	return aiDialer.DialContext(ctx, network, addr)
 }
 
-// chatRequest OpenAI 兼容的请求体
+// chatRequest OpenAI 兼容的请求体。
+//
+// 刻意不带 max_tokens：K3 这类「始终推理」模型的推理轨迹（reasoning_content）
+// 与最终答案共用这一份预算，给一个偏小的值（曾经写死 3000）会被推理吃光 ——
+// 表现是 content 为空、finish_reason=length，看着像模型坏了，其实是预算给少了。
+//
+// 不给上限是安全的：各家服务端都有自己的默认上限（deepseek-chat 4096、
+// K3 32768、gpt-4o-mini 16384），我们省下的那个数字既拦不住失控输出，
+// 反而先在推理模型上翻了车。长度约束交给提示词自己写（见 prompt_builder.go）
 type chatRequest struct {
-	Model          string        `json:"model"`
-	Messages       []ChatMessage `json:"messages"`
-	ResponseFormat *respFormat   `json:"response_format,omitempty"`
-	Temperature    *float64      `json:"temperature,omitempty"`
-	MaxTokens      int           `json:"max_tokens,omitempty"`
+	Model          string         `json:"model"`
+	Messages       []ChatMessage  `json:"messages"`
+	ResponseFormat *respFormat    `json:"response_format,omitempty"`
+	Temperature    *float64       `json:"temperature,omitempty"`
+	Stream         bool           `json:"stream"`
+	StreamOptions  *streamOptions `json:"stream_options,omitempty"`
+}
+
+// streamOptions 目前只有一个用途：让服务端在最后一块里带上 usage。
+//
+// 流式响应默认不返回 token 用量，不要它就只能自己估。真被哪家供应商拒了
+// （回 400 unknown parameter），把这行去掉即可 —— 少一个统计不值当让分析失败
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 const (
@@ -153,6 +177,17 @@ const (
 	// 阶段后缀的快照名：全等会把它们漏掉，而模型名是用户可以手改的，
 	// 漏掉的表现是保存配置成功、一到分析就报 400
 	kimiK3Prefix = "kimi-k3"
+
+	// aiIdleTimeout 流式响应多久没有任何数据就判定连接已断。
+	//
+	// 这是流式下唯一该有的超时形态：**不是总时长限制**。模型算多久都行，
+	// 只要它一直在吐字。实测 K3 一次分析 464 秒、平均每秒 31 块，最长静默只有
+	// 几秒，120 秒已经非常宽松；它要抓的是"连接活着但对面再也不说话了"
+	aiIdleTimeout = 120 * time.Second
+
+	// aiIdleCheckInterval 空闲看门狗的检查间隔。取 10 秒，最坏情况在
+	// aiIdleTimeout + 10 秒时被发现，对七八分钟一次的调用来说无所谓
+	aiIdleCheckInterval = 10 * time.Second
 )
 
 // temperatureFor 返回该模型应当使用的 temperature，nil 表示请求体里不带这个字段。
@@ -170,14 +205,20 @@ type respFormat struct {
 	Type string `json:"type"`
 }
 
-type chatResponse struct {
+// chatStreamChunk 流式响应里的一块。
+//
+// 推理模型把思考过程放在 reasoning_content，与最终答案 content 是两个字段：
+// 前者我们只数长度（实测一次分析 4 万多字符，存下来既占地方又没什么用），
+// 后者才是要落库的正文
+type chatStreamChunk struct {
 	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
+		Delta struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
+	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
@@ -185,6 +226,25 @@ type chatResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error"`
+}
+
+// streamOutcome 一次流式调用读回来的东西
+type streamOutcome struct {
+	content   string
+	tokensIn  int
+	tokensOut int
+	// reasoningChars 推理轨迹的字符数。只用来记日志，不入库
+	reasoningChars int
+}
+
+// errStreamOptionsUnsupported 供应商不认 stream_options。
+//
+// 单独给一个类型，是为了让调用方能认出它、把请求体退化成不带这个字段的版本重来，
+// 而不是把整次调用判失败 —— 它只是个可选的统计增强
+type errStreamOptionsUnsupported struct{ body string }
+
+func (e *errStreamOptionsUnsupported) Error() string {
+	return "供应商不支持 stream_options: " + shorten(e.body, 120)
 }
 
 // CompleteJSON 调用模型并强制返回 JSON。
@@ -196,30 +256,38 @@ func (c *AIClient) CompleteJSON(
 	settings AICallSettings,
 	system, user string,
 ) (*CompletionResult, error) {
-	return c.complete(ctx, settings, system, user, true, 3000)
+	return c.complete(ctx, settings, system, user, true)
 }
 
 // Complete 普通文本补全。
 //
 // 画像总结这类输出是一段给人读的中文，套 JSON 反而要多一层解析，
 // 而且 response_format=json_object 会让模型倾向于写成字段化的短句，
-// 读起来不像人话。maxTokens 由调用方给：总结限 500 字，不需要 3000 的额度。
+// 读起来不像人话。
+//
+// 输出长度不由这里管：调用方各自的提示词已经写死了字数（聊天 300 字、
+// 画像总结 500 字），客户端不再压一个 max_tokens 上限
 func (c *AIClient) Complete(
 	ctx context.Context,
 	settings AICallSettings,
 	system, user string,
-	maxTokens int,
 ) (*CompletionResult, error) {
-	return c.complete(ctx, settings, system, user, false, maxTokens)
+	return c.complete(ctx, settings, system, user, false)
 }
 
-// complete 发起一次对话补全，JSON 模式与普通模式共用这套重试与错误处理
+// complete 发起一次对话补全，JSON 模式与普通模式共用这套重试与错误处理。
+//
+// **必须用流式**，这不是偏好问题：非流式的响应在模型把整段答案写完之前一个字节
+// 都不发，而 K3 这类「始终推理」模型一次要算七八分钟。实测同一条提示词，非流式
+// 跑满 240 秒连响应头都没到，而 Kimi 后台把那次请求记为成功并计了费 —— 响应在
+// 链路上被丢了（api.moonshot.cn 背后是阿里云的 DDoS 防护地址）。流式同一条链路、
+// 同一时刻，2.8 秒就有数据、464 秒拿到完整结果。调大超时治不了这个病，
+// 只有让数据持续流动才行
 func (c *AIClient) complete(
 	ctx context.Context,
 	settings AICallSettings,
 	system, user string,
 	jsonMode bool,
-	maxTokens int,
 ) (*CompletionResult, error) {
 	// 业务上的"能不能调"由 AISettingService.ResolveCallSettings 在上游判定。
 	// 这里只是防编程错误的兜底：绕过那个入口就会发一个没有凭据的请求出去，
@@ -236,9 +304,11 @@ func (c *AIClient) complete(
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		// 温度与「这个模型收不收 temperature」的判断都在 temperatureFor 里
-		Temperature: temperatureFor(settings.Model),
-		MaxTokens:   maxTokens,
+		// 温度与「这个模型收不收 temperature」的判断都在 temperatureFor 里。
+		// max_tokens 见 chatRequest 的说明：刻意不发
+		Temperature:   temperatureFor(settings.Model),
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 	if jsonMode {
 		payload.ResponseFormat = &respFormat{Type: "json_object"}
@@ -248,9 +318,50 @@ func (c *AIClient) complete(
 	if err != nil {
 		return nil, fmt.Errorf("构造请求失败: %w", err)
 	}
+	// 备用请求体：去掉 stream_options。见下面 errStreamOptionsUnsupported 的分支
+	noUsage := payload
+	noUsage.StreamOptions = nil
+	bodyNoUsage, err := json.Marshal(noUsage)
+	if err != nil {
+		return nil, fmt.Errorf("构造请求失败: %w", err)
+	}
 
-	// 只对暂时性错误重试一次：限流、网关抖动。
-	// 参数错误、鉴权失败重试多少次都一样，反而浪费时间
+	start := time.Now()
+	out, err := c.streamWithRetry(ctx, settings, baseURL, body)
+
+	var unsupported *errStreamOptionsUnsupported
+	if errors.As(err, &unsupported) {
+		// stream_options 只是个可选的统计增强，被拒了就退一步重来。
+		// 为它把整次分析判失败不值得 —— 用户要的是结论，不是 token 数
+		log.Printf("[AI] %s 不接受 stream_options，改为不带 usage 重新请求", settings.Model)
+		out, err = c.streamWithRetry(ctx, settings, baseURL, bodyNoUsage)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	elapsed := time.Since(start)
+	// 推理长度只进日志：一次四万多字符，落库既占地方又没什么可查的
+	log.Printf("[AI] 完成 model=%s 正文=%d字 推理=%d字 耗时=%.1fs",
+		settings.Model, len([]rune(out.content)), out.reasoningChars, elapsed.Seconds())
+
+	return &CompletionResult{
+		Content:    out.content,
+		TokensIn:   out.tokensIn,
+		TokensOut:  out.tokensOut,
+		DurationMs: elapsed.Milliseconds(),
+	}, nil
+}
+
+// streamWithRetry 发一次流式请求，只对暂时性错误重试一次：限流、网关抖动。
+//
+// 参数错误、鉴权失败重试多少次都一样，反而浪费时间
+func (c *AIClient) streamWithRetry(
+	ctx context.Context,
+	settings AICallSettings,
+	baseURL string,
+	body []byte,
+) (*streamOutcome, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
@@ -261,75 +372,177 @@ func (c *AIClient) complete(
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			return nil, fmt.Errorf("构造请求失败: %w", err)
+		out, retriable, err := c.streamOnce(ctx, settings, baseURL, body)
+		if err == nil {
+			return out, nil
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+settings.APIKey)
-
-		start := time.Now()
-		resp, err := c.http.Do(req)
-		if err != nil {
-			// 网络层错误（含超时、被内网守卫拒绝）值得重试：
-			// 后者不会因为重试变好，但也没有副作用，交给上面的次数上限收敛
-			lastErr = fmt.Errorf("请求模型失败: %w", err)
-			continue
+		if !retriable {
+			return nil, err
 		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
 
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if readErr != nil {
-			lastErr = fmt.Errorf("读取模型响应失败: %w", readErr)
-			continue
-		}
+// streamOnce 发一次流式请求并把整段回答读完。
+//
+// 第二个返回值表示"这个错误值得重试一次"：网络层错误与 5xx/限流算，
+// 参数错误、鉴权失败不算 —— 重试多少次都一样，反而浪费时间
+func (c *AIClient) streamOnce(
+	ctx context.Context,
+	settings AICallSettings,
+	baseURL string,
+	body []byte,
+) (*streamOutcome, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, false, fmt.Errorf("构造请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+settings.APIKey)
+	req.Header.Set("Accept", "text/event-stream")
 
-		if resp.StatusCode != http.StatusOK {
-			// 鉴权失败不回显响应体：不少供应商会在 body 里回显提交的 Key 片段
-			//（"Incorrect API key provided: sk-abc***"），而这条错误会经
-			// error_msg 落库并展示给用户。既然是 Key 的问题就只说 Key 的问题
-			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-				return nil, fmt.Errorf("模型鉴权失败（%d），请检查 API Key 是否正确", resp.StatusCode)
-			}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// 网络层错误（含连接被内网守卫拒绝）值得重试：
+		// 后者不会因为重试变好，但也没有副作用，交给上面的次数上限收敛
+		return nil, true, fmt.Errorf("请求模型失败: %w", err)
+	}
+	defer resp.Body.Close()
 
-			lastErr = fmt.Errorf("模型返回 %d: %s", resp.StatusCode, shorten(string(raw), 200))
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
-			// 4xx 里除了限流都是确定性错误，重试没意义
-			if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-				return nil, lastErr
-			}
-			continue
-		}
-
-		var parsed chatResponse
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			return nil, fmt.Errorf("解析模型响应失败: %w", err)
-		}
-		if parsed.Error != nil {
-			return nil, fmt.Errorf("模型返回错误: %s", parsed.Error.Message)
-		}
-		if len(parsed.Choices) == 0 {
-			return nil, fmt.Errorf("模型返回内容为空")
+		// 鉴权失败不回显响应体：不少供应商会在 body 里回显提交的 Key 片段
+		//（"Incorrect API key provided: sk-abc***"），而这条错误会经
+		// error_msg 落库并展示给用户。既然是 Key 的问题就只说 Key 的问题
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, false, fmt.Errorf("模型鉴权失败（%d），请检查 API Key 是否正确", resp.StatusCode)
 		}
 
-		content := strings.TrimSpace(parsed.Choices[0].Message.Content)
-		if content == "" {
-			// 输出被 max_tokens 截断时 content 可能为空，这个原因要明确告诉调用方
-			if parsed.Choices[0].FinishReason == "length" {
-				return nil, fmt.Errorf("模型输出被长度限制截断，请精简这手牌的记录内容后重试")
-			}
-			return nil, fmt.Errorf("模型返回内容为空")
+		// 400 里点名 stream_options 的，交给调用方去掉该字段重来。
+		// 按字符串匹配而不是按错误码：各家的报错文案不统一，而"参数名出现在
+		// 报错里"是它们共同的做法
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(raw), "stream_options") {
+			return nil, false, &errStreamOptionsUnsupported{body: string(raw)}
 		}
 
-		return &CompletionResult{
-			Content:    content,
-			TokensIn:   parsed.Usage.PromptTokens,
-			TokensOut:  parsed.Usage.CompletionTokens,
-			DurationMs: time.Since(start).Milliseconds(),
-		}, nil
+		httpErr := fmt.Errorf("模型返回 %d: %s", resp.StatusCode, shorten(string(raw), 200))
+		// 4xx 里除了限流都是确定性错误，重试没意义
+		if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return nil, false, httpErr
+		}
+		return nil, true, httpErr
 	}
 
-	return nil, lastErr
+	return c.readStream(ctx, resp.Body)
+}
+
+// readStream 逐块读 SSE，累积最终答案。
+//
+// 空闲看门狗：每收到一块就刷新"最后活动时间"，超过 aiIdleTimeout 没有任何数据
+// 就取消请求判失败。模型算多久都行，只要它一直在吐字
+func (c *AIClient) readStream(ctx context.Context, body io.Reader) (*streamOutcome, bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
+	// 看门狗自己取消的和上游取消的要分开报错，否则用户只会看到一句
+	// "context canceled"，完全不知道是模型不说话了
+	var idleFired atomic.Bool
+
+	go func() {
+		ticker := time.NewTicker(aiIdleCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, lastActivity.Load())) > aiIdleTimeout {
+					idleFired.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	var (
+		out     streamOutcome
+		content strings.Builder
+		finish  string
+	)
+
+	sc := bufio.NewScanner(body)
+	// 单块可能有几 KB，Scanner 默认 64KB 上限在长回答上会被撑破
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	for sc.Scan() {
+		line := sc.Text()
+		// 只认 data: 行：空行是块分隔符，": keep-alive" 之类的注释行直接跳过
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+
+		lastActivity.Store(time.Now().UnixNano())
+
+		var chunk chatStreamChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			// 单块解不开不该让整次调用失败：已经读到的部分还在，
+			// 继续读下一块。真的整段都没内容时下面会统一报错
+			continue
+		}
+		if chunk.Error != nil {
+			return nil, false, fmt.Errorf("模型返回错误: %s", chunk.Error.Message)
+		}
+		if chunk.Usage != nil {
+			out.tokensIn = chunk.Usage.PromptTokens
+			out.tokensOut = chunk.Usage.CompletionTokens
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		delta := chunk.Choices[0].Delta
+		if delta.ReasoningContent != "" {
+			out.reasoningChars += len([]rune(delta.ReasoningContent))
+		}
+		if delta.Content != "" {
+			content.WriteString(delta.Content)
+		}
+		if fr := chunk.Choices[0].FinishReason; fr != "" {
+			finish = fr
+		}
+	}
+
+	if err := sc.Err(); err != nil {
+		if idleFired.Load() {
+			return nil, true, fmt.Errorf("模型已 %d 秒没有任何输出，判定为连接中断",
+				int(aiIdleTimeout.Seconds()))
+		}
+		return nil, true, fmt.Errorf("读取模型响应失败: %w", err)
+	}
+
+	out.content = strings.TrimSpace(content.String())
+	if out.content == "" {
+		// 服务端自己的输出上限也可能把内容截断（我们不发 max_tokens），
+		// 这个原因要明确告诉调用方，否则用户只会看到"内容为空"而不知道该改什么
+		if finish == "length" {
+			return nil, false, errors.New("模型输出被长度限制截断，请精简这手牌的记录内容后重试")
+		}
+		return nil, false, errors.New("模型返回内容为空")
+	}
+
+	return &out, false, nil
 }
 
 // shorten 截断过长的错误信息。模型返回的报错可能很长，全塞进数据库没意义

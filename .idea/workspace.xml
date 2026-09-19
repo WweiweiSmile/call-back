@@ -4,10 +4,16 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 新增模型设置功能">
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: kimi-k3模型不设置温度">
+      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config/ai.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/ai.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/ai_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/ai_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/ai_client.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/ai_client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/review_analysis_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_analysis_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/review_chat_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_chat_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/review_memory.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/review_memory.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -60,6 +66,11 @@
     &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
   <component name="RunManager">
     <configuration name="go build call-back/" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
       <module name="call-go" />
@@ -116,6 +127,7 @@
     <MESSAGE value="refactor: 消息中心添加分类" />
     <MESSAGE value="refactor: 对手名称不是必填项" />
     <MESSAGE value="refactor: 新增模型设置功能" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: 新增模型设置功能" />
+    <MESSAGE value="refactor: kimi-k3模型不设置温度" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: kimi-k3模型不设置温度" />
   </component>
 </project>

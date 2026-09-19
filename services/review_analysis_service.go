@@ -14,6 +14,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// analysisInflightWindow 「这条分析还算在跑」的时间窗。
+//
+// 它不是超时 —— AI 调用本身不限时。这里只用来把"真的在跑的分析"和"服务重启
+// 留下的孤儿行"区分开，所以取得比任何一次真实分析都长。
+// 调大它只会让重启后的残留多挡一会儿，调小它则可能让慢分析被重复触发
+const analysisInflightWindow = 30 * time.Minute
+
 // ReviewAnalysisService 复盘分析编排
 type ReviewAnalysisService struct {
 	reviewService *ReviewService
@@ -74,8 +81,9 @@ func (s *ReviewAnalysisService) countTodayUsage(userID uint) int {
 
 // RequestAnalysis 触发一次分析。
 //
-// 若手牌内容与上次分析完全一致，直接返回上次结果而不重复调用模型 ——
-// 用户反复点"分析"不该反复烧钱。
+// 第二个返回值表示"没有新建分析，返回的是已有的一条"，两种情况：
+// 内容与上次完全一致的旧结论，或这手牌正在跑的那一条。
+// 两种都不重复调用模型 —— 用户反复点"分析"不该反复烧钱。
 func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.ReviewAnalysis, bool, error) {
 	// 在请求路径上解析凭据，而不是留给后台 goroutine 去查库：
 	// analysis.Model 下面就要落库，而前端展示的正是它。让 goroutine 现查会让
@@ -100,6 +108,29 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		// 复用不消耗额度：本来就没调用模型
 		s.ensureMemoryRecorded(&reused, hand)
 		return &reused, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, err
+	}
+
+	// 同一手牌已有分析在跑：把那条原样还给调用方，不要再起一次模型调用。
+	// 前端拿到 status=running 会继续轮询，用户看到的就是"还在分析中"。
+	//
+	// 这是"不限时"之后必须补的一道闸：一次 K3 分析要十几分钟，用户等急了
+	// 再点一次，原来会并行烧两份推理 token、扣两次额度
+	//
+	// 认 running/pending 但**加时间窗**：分析跑到一半重启服务，后台 goroutine
+	// 随进程一起没了，那条记录会永远停在 running（没有任何东西会去改它）。
+	// 无条件认它，这手牌就再也分析不了了 —— 而重启恰恰是调试期最常做的事。
+	// 超出窗口的当作中断残留，放行新的分析
+	var inflight models.ReviewAnalysis
+	err = config.DB.Where("hand_id = ? AND user_id = ? AND status IN ? AND created_at > ?",
+		handID, userID,
+		[]string{models.AnalysisStatusPending, models.AnalysisStatusRunning},
+		time.Now().Add(-analysisInflightWindow)).
+		Order("id DESC").First(&inflight).Error
+	if err == nil {
+		return &inflight, true, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, err
@@ -166,9 +197,10 @@ func (s *ReviewAnalysisService) runAnalysis(
 	analysis.Status = models.AnalysisStatusRunning
 	config.DB.Model(analysis).Update("status", models.AnalysisStatusRunning)
 
-	timeout := time.Duration(config.AIConfig().TimeoutSec) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	// 不设超时。K3 这类「始终推理」模型一篇分析要跑几分钟，掐断的话这次调用
+	// 已经烧掉的推理 token 全白花，用户还拿不到结论 —— 钱和时间都亏两次。
+	// 单次调用能持续多久交给模型自己决定，我们只管每日次数（AIDailyLimit）
+	ctx := context.Background()
 
 	tags, err := s.reviewService.GetLeakTagModels()
 	if err != nil {
