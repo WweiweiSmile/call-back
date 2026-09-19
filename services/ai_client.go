@@ -135,8 +135,35 @@ type chatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []ChatMessage `json:"messages"`
 	ResponseFormat *respFormat   `json:"response_format,omitempty"`
-	Temperature    float64       `json:"temperature"`
+	Temperature    *float64      `json:"temperature,omitempty"`
 	MaxTokens      int           `json:"max_tokens,omitempty"`
+}
+
+const (
+	// defaultTemperature 默认温度。扑克分析要的是稳定可复现，不是创意 ——
+	// 低温度能减少同一手牌两次分析结论差异过大
+	defaultTemperature = 0.3
+
+	// kimiK3Prefix 不接受 temperature 参数的模型前缀。
+	//
+	// Moonshot 的 K3 是固定温度的推理模型，请求里带上 temperature 会被直接拒绝，
+	// 所以这类模型必须**整个字段都不发**，而不是发一个默认值。
+	//
+	// 用前缀而不是全等，是为了覆盖 kimi-k3-0905、kimi-k3-preview 这类带日期或
+	// 阶段后缀的快照名：全等会把它们漏掉，而模型名是用户可以手改的，
+	// 漏掉的表现是保存配置成功、一到分析就报 400
+	kimiK3Prefix = "kimi-k3"
+)
+
+// temperatureFor 返回该模型应当使用的 temperature，nil 表示请求体里不带这个字段。
+//
+// 只有 Kimi K3 这一支返回 nil，其余模型一律拿默认温度
+func temperatureFor(model string) *float64 {
+	if strings.HasPrefix(model, kimiK3Prefix) {
+		return nil
+	}
+	t := defaultTemperature
+	return &t
 }
 
 type respFormat struct {
@@ -209,8 +236,8 @@ func (c *AIClient) complete(
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		// 扑克分析要的是稳定可复现，不是创意。低温度能减少同一手牌两次分析结论差异过大
-		Temperature: 0.3,
+		// 温度与「这个模型收不收 temperature」的判断都在 temperatureFor 里
+		Temperature: temperatureFor(settings.Model),
 		MaxTokens:   maxTokens,
 	}
 	if jsonMode {

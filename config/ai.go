@@ -111,7 +111,7 @@ func AIPresets() []AIPreset {
 			Key:     AIPresetMoonshot,
 			Name:    "Kimi",
 			BaseURL: "https://api.moonshot.cn/v1",
-			Model:   "moonshot-v1-8k",
+			Model:   "kimi-k3",
 		},
 		{
 			Key:     AIPresetZhipu,
