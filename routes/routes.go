@@ -35,12 +35,17 @@ func SetupRoutes(r *gin.Engine) {
 			// 用户信息
 			authorized.GET("/auth/user", authController.GetUserInfo)
 
-			// 用户默认设置。目前只有复盘录入用的盲注默认值，
+			// 用户默认设置：复盘录入用的盲注默认值 + BYOK 模型配置，
 			// 放在顶层而不是 /reviews 下面：它是账号级偏好，不属于某手牌或某次分析
 			preferences := authorized.Group("/preferences")
 			{
-				preferences.GET("", preferenceController.Get)    // 我的默认设置
-				preferences.PUT("", preferenceController.Update) // 保存默认设置
+				preferences.GET("", preferenceController.Get)    // 我的默认盲注
+				preferences.PUT("", preferenceController.Update) // 保存默认盲注
+
+				// 模型配置单独一对读写：Key 是"永不下发明文的秘密"，
+				// 与上面那组"整体替换的值"生命周期不同，不能共用一个 PUT
+				preferences.GET("/ai", preferenceController.GetAI)    // 我的模型配置（Key 只回显掩码）
+				preferences.PUT("/ai", preferenceController.UpdateAI) // 保存模型配置
 			}
 
 			// 游戏相关路由

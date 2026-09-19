@@ -201,8 +201,9 @@ CREATE TABLE IF NOT EXISTS review_messages (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复盘追问对话表';
 
 -- 用户默认设置表
--- 目前只有复盘录入用的盲注默认值。单独成表而不是往 users 加列：
--- users 是鉴权链路的表，往上堆业务偏好会让每次读用户信息都多带一堆字段。
+-- 两块内容：复盘录入用的盲注默认值，以及 BYOK 的模型配置。
+-- 单独成表而不是往 users 加列：users 是鉴权链路的表，往上堆业务偏好会让
+-- 每次读用户信息都多带一堆字段。
 -- 没设置过的用户不会在这里有行，接口按默认值兜底（见 PreferenceService.Get）
 CREATE TABLE IF NOT EXISTS user_preferences (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -210,6 +211,12 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     small_blind_bb DOUBLE DEFAULT 0.5 COMMENT '默认小盲(BB)',
     big_blind_bb DOUBLE DEFAULT 1 COMMENT '默认大盲(BB)',
     ante_bb DOUBLE DEFAULT 0 COMMENT '默认前注(BB)，每人一份',
+    -- 以下四项是 BYOK 模型配置。空串统一表示"没配过"，不用 NULL。
+    -- ai_base_url 为空时读取会回退到默认预设（见 config.DefaultAIPreset）
+    ai_base_url VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'AI 接口地址(填到 /v1 这一层)',
+    ai_model VARCHAR(100) NOT NULL DEFAULT '' COMMENT '模型名',
+    ai_api_key_encrypted VARCHAR(512) NOT NULL DEFAULT '' COMMENT 'AES-256-GCM 加密后的 API Key',
+    ai_api_key_hint VARCHAR(16) NOT NULL DEFAULT '' COMMENT 'Key 末 4 位，仅用于掩码回显',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE INDEX idx_up_user_id (user_id)

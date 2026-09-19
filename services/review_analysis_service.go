@@ -18,6 +18,7 @@ import (
 type ReviewAnalysisService struct {
 	reviewService *ReviewService
 	aiClient      *AIClient
+	aiSettingSvc  *AISettingService
 	memoryService *ReviewMemoryService
 	suggestionSvc *TagSuggestionService
 }
@@ -26,6 +27,7 @@ func NewReviewAnalysisService() *ReviewAnalysisService {
 	return &ReviewAnalysisService{
 		reviewService: NewReviewService(),
 		aiClient:      NewAIClient(),
+		aiSettingSvc:  &AISettingService{},
 		memoryService: NewReviewMemoryService(),
 		suggestionSvc: &TagSuggestionService{},
 	}
@@ -41,11 +43,13 @@ type AIStatus struct {
 
 // GetAIStatus 返回 AI 可用状态与今日剩余额度。
 //
-// 前端据此把按钮置灰并说明原因，比让用户点了再看到失败要好
+// 前端据此把按钮置灰并说明原因，比让用户点了再看到失败要好。
+//
+// Enabled 自 BYOK 起是**该用户**是否配了可用的模型，不再是"服务端配没配 Key"
 func (s *ReviewAnalysisService) GetAIStatus(userID uint) *AIStatus {
 	settings := config.AIConfig()
 	status := &AIStatus{
-		Enabled:    settings.Enabled,
+		Enabled:    s.aiSettingSvc.HasUsableConfig(userID),
 		DailyLimit: settings.DailyLimit,
 	}
 	status.UsedToday = s.countTodayUsage(userID)
@@ -73,8 +77,13 @@ func (s *ReviewAnalysisService) countTodayUsage(userID uint) int {
 // 若手牌内容与上次分析完全一致，直接返回上次结果而不重复调用模型 ——
 // 用户反复点"分析"不该反复烧钱。
 func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.ReviewAnalysis, bool, error) {
-	if !config.AIConfig().Enabled {
-		return nil, false, errors.New("服务端未配置 AI，暂时无法分析")
+	// 在请求路径上解析凭据，而不是留给后台 goroutine 去查库：
+	// analysis.Model 下面就要落库，而前端展示的正是它。让 goroutine 现查会让
+	// "落库的模型名"与"实际调用的模型名"可能不一致，而那是排查问题时唯一的线索。
+	// 附带好处：没配模型变成同步报错，而不是几秒后多一条 failed 分析
+	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
+	if err != nil {
+		return nil, false, err
 	}
 
 	hand, err := s.reviewService.GetHand(userID, handID)
@@ -106,7 +115,7 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		HandID:        handID,
 		UserID:        userID,
 		Status:        models.AnalysisStatusPending,
-		Model:         config.AIConfig().Model,
+		Model:         settings.Model,
 		PromptVersion: models.CurrentPromptVersion,
 		ContentHash:   hand.ContentHash,
 	}
@@ -120,12 +129,13 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		Update("analyze_status", models.AnalyzeStatusPending)
 
 	// 传给后台的必须是副本：HTTP 响应正在读 analysis 序列化返回，
-	// 后台同时改它的字段就是数据竞争。副本是值拷贝，两边互不影响
+	// 后台同时改它的字段就是数据竞争。副本是值拷贝，两边互不影响。
+	// 凭据同样值拷贝传进去，理由一致
 	snapshot := *analysis
 
 	// 用独立的 context，不能用 HTTP 请求的 context ——
 	// 请求一返回它就被取消了，goroutine 里的模型调用会被立刻中断
-	go s.runAnalysis(&snapshot, hand)
+	go s.runAnalysis(&snapshot, hand, *settings)
 
 	return analysis, false, nil
 }
@@ -133,8 +143,15 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 // runAnalysis 在后台执行分析并落库。
 //
 // 传入完整的 analysis 对象而不是 id：写回时要用 Save 走字段序列化器，
-// 需要有一个带全部字段的模型实例
-func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, hand *models.ReviewHand) {
+// 需要有一个带全部字段的模型实例。
+//
+// settings 由请求路径解析后值拷贝进来，与 analysis 同一套"后台不允许共享
+// HTTP 路径对象"的纪律
+func (s *ReviewAnalysisService) runAnalysis(
+	analysis *models.ReviewAnalysis,
+	hand *models.ReviewHand,
+	settings AICallSettings,
+) {
 	start := time.Now()
 	analysisID, handID := analysis.ID, hand.ID
 
@@ -164,7 +181,7 @@ func (s *ReviewAnalysisService) runAnalysis(analysis *models.ReviewAnalysis, han
 	memory := s.memoryService.BuildMemoryContext(hand.UserID)
 	system, user := BuildAnalysisPrompt(hand, tags, memory)
 
-	result, err := s.aiClient.CompleteJSON(ctx, system, user)
+	result, err := s.aiClient.CompleteJSON(ctx, settings, system, user)
 	if err != nil {
 		s.failAnalysis(analysisID, handID, err.Error(), time.Since(start))
 		return

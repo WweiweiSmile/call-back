@@ -24,6 +24,10 @@ func main() {
 	// 设置JWT密钥
 	utils.SetJWTSecret(config.AppConfig.JWTSecret)
 
+	// 设置用户 API Key 的加密主密钥。缺失时不致命：服务照常启动，
+	// 只是「模型设置」只能读不能写
+	utils.SetPreferenceEncryptionKey(config.AppConfig.PrefEncryptionKey)
+
 	// 初始化数据库
 	if err := config.InitDB(); err != nil {
 		log.Fatal("Failed to initialize database:", err)

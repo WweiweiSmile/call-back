@@ -25,6 +25,7 @@ type ReviewChatService struct {
 	reviewService *ReviewService
 	memoryService *ReviewMemoryService
 	aiClient      *AIClient
+	aiSettingSvc  *AISettingService
 }
 
 func NewReviewChatService() *ReviewChatService {
@@ -32,6 +33,7 @@ func NewReviewChatService() *ReviewChatService {
 		reviewService: NewReviewService(),
 		memoryService: NewReviewMemoryService(),
 		aiClient:      NewAIClient(),
+		aiSettingSvc:  &AISettingService{},
 	}
 }
 
@@ -60,6 +62,13 @@ func (s *ReviewChatService) Ask(
 		return nil, nil, err
 	}
 
+	// 排在归属校验之后：手牌不存在（或不是自己的）比"没配模型"更该先报 ——
+	// 那种情况下让用户去配置模型是误导
+	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	analysis, err := s.latestDoneAnalysis(userID, handID)
 	if err != nil {
 		return nil, nil, err
@@ -78,7 +87,7 @@ func (s *ReviewChatService) Ask(
 	memory := s.memoryService.BuildMemoryContext(userID)
 	system, userPrompt := BuildChatPrompt(hand, analysis, memory, history)
 
-	completion, err := s.aiClient.Complete(ctx, system, userPrompt, ChatMaxTokens)
+	completion, err := s.aiClient.Complete(ctx, *settings, system, userPrompt, ChatMaxTokens)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -72,11 +72,15 @@ func (w ProfileWindow) IsThin() bool {
 
 // ReviewMemoryService 长期记忆：洞察落库、画像聚合、总结重写
 type ReviewMemoryService struct {
-	aiClient *AIClient
+	aiClient     *AIClient
+	aiSettingSvc *AISettingService
 }
 
 func NewReviewMemoryService() *ReviewMemoryService {
-	return &ReviewMemoryService{aiClient: NewAIClient()}
+	return &ReviewMemoryService{
+		aiClient:     NewAIClient(),
+		aiSettingSvc: &AISettingService{},
+	}
 }
 
 // RecordInsights 把一次分析产出的 leaks / strengths 落成洞察行。
@@ -517,8 +521,16 @@ func (s *ReviewMemoryService) RewriteSummary(ctx context.Context, userID uint) (
 
 	system, user := BuildProfileSummaryPrompt(profile, newInsights, window)
 
+	// 解析凭据排在"没有洞察就早退"（上面那个分支）之后：
+	// 空画像的用户点「重新生成总结」应该拿到 200，而不是一句"还没配模型"——
+	// 那时确实没什么可重写的，报配置错只是噪音
+	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
+	if err != nil {
+		return nil, err
+	}
+
 	// 500 字中文留 800 token 足够。给太多会让模型忍不住写长
-	completion, err := s.aiClient.Complete(ctx, system, user, 800)
+	completion, err := s.aiClient.Complete(ctx, *settings, system, user, 800)
 	if err != nil {
 		return nil, err
 	}

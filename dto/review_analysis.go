@@ -52,6 +52,9 @@ type RequestAnalysisResponse struct {
 }
 
 // AIStatusResponse AI 可用状态
+//
+// Enabled 自 BYOK 起是"该用户是否配了可用的模型"，不再是"服务端配没配 Key"。
+// 字段刻意一个都没加：前端只关心能不能点，具体配的是什么去设置页看
 type AIStatusResponse struct {
 	Enabled    bool `json:"enabled"`
 	DailyLimit int  `json:"dailyLimit"`
