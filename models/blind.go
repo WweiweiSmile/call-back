@@ -25,9 +25,10 @@ type BlindConfig struct {
 	// VillainPositions 记了位置的对手（M7.1 起是全部对手）。
 	// 他们的行动按位置记录，所以账也记在位置这个键上
 	VillainPositions []string
-	// LegacyVillainPosition 老手牌里那个"关键对手"的位置。
+	// LegacyVillainPosition 老手牌里那个"关键对手"的位置，作为 ActorVillain 的兜底键。
 	// M7.1 之前只有他能被认出来，且当时所有对手行动都记在聚合角色 "villain" 上，
-	// 所以这笔账要记在 ActorVillain 这个键上，而不是位置键
+	// 所以这笔账要记在 ActorVillain 这个键上，而不是位置键。
+	// 新记录的行动按位置记，这个键不会命中，等于作废
 	LegacyVillainPosition string
 }
 

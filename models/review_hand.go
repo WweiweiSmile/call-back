@@ -231,13 +231,12 @@ func (h *ReviewHand) Blinds() BlindConfig {
 		if v.Position == "" {
 			continue
 		}
-		// 有名字的是 M7.1 之后的记录：行动按位置记，账也记在位置上
-		if v.Name != "" {
-			b.VillainPositions = append(b.VillainPositions, v.Position)
-			continue
-		}
-		// 没名字的是老数据：当时行动记在聚合角色 "villain" 上，只认第一个
-		if b.LegacyVillainPosition == "" {
+		// 有没有名字都按位置记：名字只是称呼，而且现在允许只记位置不记名字
+		b.VillainPositions = append(b.VillainPositions, v.Position)
+		// 老手牌的行动记在聚合角色 "villain" 上，位置这个键对不上，所以额外把第一个
+		// 没名字的对手认到 villain 键上兜底（老数据最多一个对手带位置）。
+		// 新记录的行动按位置记，这个键不会命中，等于没记
+		if v.Name == "" && b.LegacyVillainPosition == "" {
 			b.LegacyVillainPosition = v.Position
 		}
 	}

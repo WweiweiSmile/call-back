@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 复盘添加详细对手" />
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 消息中心添加分类" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -109,6 +109,7 @@
     <MESSAGE value="refactor: 画像统计手牌数和时间范围调整" />
     <MESSAGE value="refactor: 复盘手牌添加盲注跟前注" />
     <MESSAGE value="refactor: 复盘添加详细对手" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: 复盘添加详细对手" />
+    <MESSAGE value="refactor: 消息中心添加分类" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: 消息中心添加分类" />
   </component>
 </project>
