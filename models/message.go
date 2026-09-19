@@ -34,6 +34,30 @@ func MessageCategoryOf(msgType string) string {
 	}
 }
 
+// 消息列表的审批状态筛选。
+//
+// 口径是"还要不要我处理"，不是消息本身的字段：pending 与 handled 互补，
+// 两者加起来正好是全部（handled 里既有我处理过的审批，也有结果告知类消息）。
+// 所以「未审批 / 已审批」两个标签不重不漏，任何一条消息都能在其中一个里找到。
+const (
+	MessageScopeAll     = "all"     // 全部
+	MessageScopePending = "pending" // 待我处理
+	MessageScopeHandled = "handled" // 其余：已处理的审批 + 结果告知
+)
+
+// IsValidMessageScope scope 是否是已知取值。
+// 空串与 "all" 等价：这个参数是可选的，不传就是不筛
+//
+// 未知取值要报错，不能当成全部：参数被静默丢弃时前端会以为筛选生效了，
+// 这类"传了但没人读"的问题本项目踩过一次（交易流水的 userId/user_id）
+func IsValidMessageScope(scope string) bool {
+	switch scope {
+	case "", MessageScopeAll, MessageScopePending, MessageScopeHandled:
+		return true
+	}
+	return false
+}
+
 // Message 站内消息表
 type Message struct {
 	ID        uint   `json:"id" gorm:"primaryKey"`

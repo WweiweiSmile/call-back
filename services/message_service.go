@@ -12,6 +12,48 @@ import (
 
 type MessageService struct{}
 
+// MessageListFilter 消息列表筛选条件
+type MessageListFilter struct {
+	// IsRead 已读状态，nil 表示不筛
+	IsRead *bool
+	// Scope 审批状态：见 models.MessageScope*。空串 = 全部
+	Scope string
+}
+
+// pendingApprovalSQL 审批类消息里"关联单据仍在待审"的条件。
+//
+// actionable 是算出来的（见 resolveActionable），不在消息表上，所以这里也得回到
+// 单据表再问一次，两处口径必须一致，否则会出现"标着待处理却在已审批里"的消息。
+// 用 EXISTS 而不是 IN：单据不存在时 EXISTS 为假 = 这条消息已经没什么可做的，
+// 正好落在"已审批"那边。score_requests 有软删除，要一起排掉。
+const pendingApprovalSQL = `(
+	(messages.type = ? AND EXISTS (
+		SELECT 1 FROM score_requests r
+		WHERE r.id = messages.request_id AND r.status = ? AND r.deleted_at IS NULL))
+	OR (messages.type = ? AND EXISTS (
+		SELECT 1 FROM review_tag_suggestions s
+		WHERE s.id = messages.suggestion_id AND s.status = ?))
+)`
+
+// applyMessageScope 套用审批状态筛选
+func applyMessageScope(query *gorm.DB, scope string) *gorm.DB {
+	args := []any{
+		models.MsgTypeRequestCreated, models.ScoreReqStatusPending,
+		models.MsgTypeTagSuggestionPending, models.TagSuggestionStatusPending,
+	}
+
+	switch scope {
+	case models.MessageScopePending:
+		return query.Where(pendingApprovalSQL, args...)
+	case models.MessageScopeHandled:
+		// 取反即可，不需要另写一份"非待审"的条件：两个取值互补，
+		// 分头写两份迟早会漂移，出现两边都不认的消息
+		return query.Where("NOT "+pendingApprovalSQL, args...)
+	default:
+		return query
+	}
+}
+
 // messageRef 消息关联的单据。
 //
 // 用结构体而不是继续加位置参数：三种关联至多命中一种，写成三个 *uint 位置参数
@@ -37,11 +79,12 @@ func pushMessage(tx *gorm.DB, userID uint, msgType, title, content string, ref m
 }
 
 // GetList 获取当前用户的消息列表
-func (s *MessageService) GetList(userID uint, isRead *bool, page, pageSize int) (*dto.MessageListResponse, error) {
+func (s *MessageService) GetList(userID uint, filter MessageListFilter, page, pageSize int) (*dto.MessageListResponse, error) {
 	query := config.DB.Model(&models.Message{}).Where("user_id = ?", userID)
-	if isRead != nil {
-		query = query.Where("is_read = ?", *isRead)
+	if filter.IsRead != nil {
+		query = query.Where("is_read = ?", *filter.IsRead)
 	}
+	query = applyMessageScope(query, filter.Scope)
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -50,7 +93,9 @@ func (s *MessageService) GetList(userID uint, isRead *bool, page, pageSize int) 
 
 	var messages []models.Message
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&messages).Error; err != nil {
+	// id 作为次序的兜底：同一秒里插入的两条消息在只按 created_at 排序时顺序不定，
+	// 翻页会出现重复或漏掉（第二页把第一页最后一条又带出来一次）
+	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&messages).Error; err != nil {
 		return nil, err
 	}
 

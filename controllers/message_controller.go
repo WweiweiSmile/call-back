@@ -3,6 +3,7 @@ package controllers
 import (
 	"call-go/dto"
 	"call-go/middleware"
+	"call-go/models"
 	"call-go/services"
 	"net/http"
 	"strconv"
@@ -31,9 +32,20 @@ func (c *MessageController) GetList(ctx *gin.Context) {
 		isRead = &value
 	}
 
+	// 审批状态：all（或省略）/ pending 待我处理 / handled 其余。
+	// 未知取值直接报错，不静默当成全部
+	scope := ctx.DefaultQuery("scope", models.MessageScopeAll)
+	if !models.IsValidMessageScope(scope) {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的 scope："+scope))
+		return
+	}
+
 	userID := middleware.GetUserID(ctx)
 
-	list, err := c.messageService.GetList(userID, isRead, page, pageSize)
+	list, err := c.messageService.GetList(userID, services.MessageListFilter{
+		IsRead: isRead,
+		Scope:  scope,
+	}, page, pageSize)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取消息失败: "+err.Error()))
 		return
