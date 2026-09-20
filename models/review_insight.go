@@ -93,8 +93,12 @@ type ReviewProfile struct {
 	Leaks     []ProfileLeakStat     `json:"leaks" gorm:"serializer:json;type:json;comment:漏洞排行"`
 	Strengths []ProfileStrengthItem `json:"strengths" gorm:"serializer:json;type:json;comment:最近的优点"`
 
-	// Summary 一段自然语言总结，≤500 字，由 AI 增量重写
-	Summary string `json:"summary" gorm:"type:text;comment:AI 增量重写的阶段总结"`
+	// Summary 一段自然语言总结，由 AI 增量重写，**篇幅不设上限**
+	//
+	// 用 mediumtext 而不是 text：text 的上限是 65535 **字节**，utf8mb4 下一个
+	// 汉字占 3 字节，实际只能装约 2.1 万字。那是个隐形上限，模型真写长时会
+	// 严格模式报 1406、非严格模式静默截断，比明写一个上限更难查
+	Summary string `json:"summary" gorm:"type:mediumtext;comment:AI 增量重写的阶段总结"`
 
 	// SummaryVersion 每次重写 +1，便于回溯「这条总结是哪一版」
 	SummaryVersion int `json:"summaryVersion" gorm:"comment:总结版本号"`

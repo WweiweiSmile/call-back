@@ -265,8 +265,8 @@ func (c *AIClient) CompleteJSON(
 // 而且 response_format=json_object 会让模型倾向于写成字段化的短句，
 // 读起来不像人话。
 //
-// 输出长度不由这里管：调用方各自的提示词已经写死了字数（聊天 300 字、
-// 画像总结 500 字），客户端不再压一个 max_tokens 上限
+// 输出长度不由这里管：字数一律交给调用方的提示词，客户端不压 max_tokens 上限
+// （聊天提示词要求 300 字；画像总结不限字数）
 func (c *AIClient) Complete(
 	ctx context.Context,
 	settings AICallSettings,

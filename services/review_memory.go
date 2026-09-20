@@ -45,8 +45,6 @@ const (
 	ProfileStrengthCount = 5
 	// ProfileTopLeaksInPrompt 注入提示词的高频漏洞条数上限
 	ProfileTopLeaksInPrompt = 5
-	// SummaryMaxRunes 总结字数上限（设计文档定为 500 字）
-	SummaryMaxRunes = 500
 	// memoryRecentThoughtCount 记忆块里带几条玩家自己的近期原话
 	memoryRecentThoughtCount = 3
 
@@ -667,15 +665,15 @@ func (s *ReviewMemoryService) runSummary(userID uint, settings AICallSettings) {
 
 	// 不能用 HTTP 请求的 context：请求早已返回，ctx 一返回就被取消
 	// 不再压 max_tokens：用 K3 时推理轨迹会把它吃光、返回空内容。
-	// 长度靠两道后置约束兜住 —— 提示词里的「不超过 500 字」，
-	// 以及下面 truncateRunes 的硬截断，超出部分不会进库
+	// 长度**不做任何后置截断** —— 画像总结不限字数，提示词里不写字数要求，
+	// 这里也不砍，唯一的物理边界是 summary 列的 mediumtext
 	completion, err := s.aiClient.Complete(context.Background(), settings, system, user)
 	if err != nil {
 		s.failSummary(userID, err.Error())
 		return
 	}
 
-	summary := truncateRunes(strings.TrimSpace(completion.Content), SummaryMaxRunes)
+	summary := strings.TrimSpace(completion.Content)
 	if summary == "" {
 		s.failSummary(userID, "模型返回的总结为空")
 		return
