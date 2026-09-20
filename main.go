@@ -5,6 +5,7 @@ import (
 	"call-go/middleware"
 	"call-go/models"
 	"call-go/routes"
+	"call-go/services"
 	"call-go/utils"
 	"log"
 	"os"
@@ -57,6 +58,10 @@ func main() {
 
 	// 插入测试数据
 	seedTestData()
+
+	// 回收上次退出时留下的未完成任务。必须排在 AutoMigrate 之后 ——
+	// 老库还没有 status 列时这条 UPDATE 会直接报错
+	services.ReapInterruptedTasks()
 
 	// 同步漏洞标签字典（幂等，按 Code upsert）
 	seedLeakTags()

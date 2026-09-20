@@ -8,6 +8,17 @@ const (
 	InsightKindStrength = "strength" // 优点
 )
 
+// 画像总结重写的任务状态。
+//
+// 画像行本身是长期存在的，异步的只是"重写总结"这一件事，所以状态挂在
+// summary_ 前缀下，不复用 MessageStatus* —— 两者将来可能分化
+const (
+	SummaryStatusPending = "pending"
+	SummaryStatusRunning = "running"
+	SummaryStatusDone    = "done"
+	SummaryStatusFailed  = "failed"
+)
+
 // ReviewInsight 复盘洞察 —— 长期记忆的原子。
 //
 // 每次分析成功后，把 AI 输出的每条 leaks / strengths 落成一行。
@@ -90,6 +101,20 @@ type ReviewProfile struct {
 
 	// LastSummaryAt 上次重写总结的时间。为空表示从未重写过
 	LastSummaryAt *time.Time `json:"lastSummaryAt,omitempty" gorm:"comment:上次重写总结的时间"`
+
+	// SummaryStatus 重写任务的状态，供前端决定显示"生成中"还是正文
+	//
+	// default:'done' 只服务于**存量行迁移**（老画像没有"正在重写"一说）；
+	// 代码里写状态时必须显式赋值，理由同 ReviewMessage.Status
+	SummaryStatus string `json:"summaryStatus" gorm:"size:20;not null;default:'done';comment:pending/running/done/failed"`
+	// SummaryError 重写失败的原因
+	SummaryError string `json:"summaryError,omitempty" gorm:"size:500"`
+	// SummaryStartedAt 本次重写是什么时候开始的。
+	//
+	// 在飞闸与孤儿回收都拿它判"这条还在跑吗"。**不能用 UpdatedAt**：
+	// GET /profile 每次都跑一遍 refreshProfile 并 Save，用户每刷一次画像页就把
+	// UpdatedAt 顶到当下，窗口永远不过期，总结在这台机器上再也跑不起来
+	SummaryStartedAt *time.Time `json:"summaryStartedAt,omitempty" gorm:"comment:本次重写开始时间，任务时间窗判据"`
 
 	// LastSummaryInsightID 上次重写总结时已纳入的最大洞察 ID。
 	// 用 ID 水位线而不是「上次的洞察总数」来判断新增量：

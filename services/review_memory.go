@@ -49,6 +49,16 @@ const (
 	SummaryMaxRunes = 500
 	// memoryRecentThoughtCount 记忆块里带几条玩家自己的近期原话
 	memoryRecentThoughtCount = 3
+
+	// profileInflightWindow 「这次总结重写还算在跑」的时间窗。
+	//
+	// 同 chatInflightWindow：不是超时（AI 调用不限时），只用来把"真的在跑"和
+	// "重启或卡死留下的孤儿行"分开。取 15 分钟是因为一次 K3 调用实测要七八分钟，
+	// 留出余量才不会把慢调用误判成孤儿
+	profileInflightWindow = 15 * time.Minute
+
+	// profileInterruptedMsg 判定为中断后的 summary_error
+	profileInterruptedMsg = "任务中断，请重新生成"
 )
 
 // ProfileWindow 一次统计覆盖的范围。
@@ -220,8 +230,28 @@ func ShouldRewriteSummary(profile *models.ReviewProfile, newHandCount int) bool 
 // 统计部分是纯计算，不调用模型，所以每次分析完都可以刷新；
 // 只有 summary 的生成才需要模型，那个由 MaybeRewriteSummary 把关。
 func (s *ReviewMemoryService) RefreshProfile(userID uint) (*models.ReviewProfile, error) {
+	s.reapStuckSummary(userID)
 	profile, _, err := s.refreshProfile(userID)
 	return profile, err
+}
+
+// reapStuckSummary 把超时仍未结束的总结重写判死。
+//
+// 读接口顺手写状态看起来越界，但语义上等同于刷新一次物化视图（同 GetProfile 的
+// 先例）：那条任务的后台 goroutine 已经随重启消失或卡死了，不在这里收掉，
+// 前端会因为"总结正在生成中"而永远转圈，用户既看不到新总结也点不动按钮
+func (s *ReviewMemoryService) reapStuckSummary(userID uint) {
+	if err := config.DB.Model(&models.ReviewProfile{}).
+		Where("user_id = ? AND summary_status IN ? AND summary_started_at IS NOT NULL AND summary_started_at < ?",
+			userID,
+			[]string{models.SummaryStatusPending, models.SummaryStatusRunning},
+			time.Now().Add(-profileInflightWindow)).
+		Updates(map[string]interface{}{
+			"summary_status": models.SummaryStatusFailed,
+			"summary_error":  profileInterruptedMsg,
+		}).Error; err != nil {
+		log.Printf("[记忆] 回收中断的总结失败 user=%d: %v", userID, err)
+	}
 }
 
 // refreshProfile 刷新统计并顺带回传本次的统计窗口 ——
@@ -255,7 +285,19 @@ func (s *ReviewMemoryService) refreshProfile(userID uint) (*models.ReviewProfile
 	profile.Strengths = strengths
 	profile.HandsReviewed = int(handsReviewed)
 
-	if err := config.DB.Save(profile).Error; err != nil {
+	// 只写自己负责的三列。
+	//
+	// **不能把整个结构体 Save 回去**：这个结构体是本次调用开头读的，而"重写总结"
+	// 是另一个后台任务，它会在中间更新 summary / summary_version / summary_status。
+	// 整行写回会把那些更新打回原样 —— 实测过：总结明明重写成功，却被轮询画像页
+	// 触发的那次刷新覆盖回 running 和旧正文，任务永远卡在"生成中"，版本号也丢了。
+	// 而前端在重写期间每 2 秒轮询一次画像，撞上的概率并不低
+	//
+	// 用 Select 限定列而不是 Omit 排除列：将来给这张表加字段时，
+	// 新字段默认不会被这里误写，而 Omit 会静默漏掉它
+	if err := config.DB.Model(profile).
+		Select("leaks", "strengths", "hands_reviewed").
+		Updates(profile).Error; err != nil {
 		return nil, ProfileWindow{}, fmt.Errorf("保存画像失败: %w", err)
 	}
 	return profile, window.ProfileWindow, nil
@@ -490,80 +532,193 @@ func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 		return
 	}
 
-	if _, err := s.RewriteSummary(context.Background(), userID); err != nil {
-		// 总结重写失败不影响分析结果，记日志即可，下次分析会再触发
+	// 这里跑在分析的后台 goroutine 里，拿不到"同步报错给用户"的时机，
+	// 失败只记日志，下次分析会再触发。
+	// 走的是与手动点同一入口，于是共用同一道在飞闸与同一套状态机
+	if _, _, err := s.StartSummaryRewrite(userID); err != nil {
 		log.Printf("[记忆] 重写总结失败 user=%d: %v", userID, err)
 	}
 }
 
-// RewriteSummary 调模型增量重写画像总结。
+// StartSummaryRewrite 触发一次画像总结重写。
 //
-// 传的是「已有总结 + 新增洞察 + 标签统计」，让模型做增量更新而不是从零重写：
-// 从零重写会让它把注意力全放在最新几手牌上，总结随最新一手牌剧烈摆动。
-func (s *ReviewMemoryService) RewriteSummary(ctx context.Context, userID uint) (*models.ReviewProfile, error) {
+// 异步：刷新统计、置 pending、起后台 goroutine，立刻返回当前画像 ——
+// 与「分析手牌」同一套。K3 这类「始终推理」模型一次要跑几分钟，
+// 同步接口必然被前端或网关先掐断。
+//
+// 凭据在这里同步解析：请求路径调用时"没配模型"就变成一句立刻返回的报错，
+// 而不是几秒后才发现的一次失败；自动触发路径（分析成功后）忽略这个错误，
+// 只记日志
+//
+// 第二个返回值表示"没有新建任务"，两种来源：没有洞察可写（无事可做），
+// 或已有一条在跑的（把当前画像原样还回去，前端继续轮询即可）
+func (s *ReviewMemoryService) StartSummaryRewrite(userID uint) (*models.ReviewProfile, bool, error) {
 	// 顺带拿到统计窗口：提示词必须告诉模型这些数字覆盖了多大的样本，
 	// 以及"窗口内没再出现"意味着进步
-	profile, window, err := s.refreshProfile(userID)
+	profile, _, err := s.refreshProfile(userID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if len(profile.Leaks) == 0 && len(profile.Strengths) == 0 {
-		// 一条洞察都没有，没什么可总结的。不动 summary，避免产出空洞的套话
-		return profile, nil
+		// 一条洞察都没有，没什么可总结的。不动 summary，避免产出空洞的套话。
+		// 这里必须**不置 pending**：不然后台会立刻发现无事可做，白转一圈
+		return profile, false, nil
+	}
+
+	// 解析凭据排在"没有洞察就早退"之后：空画像的用户点「重新生成总结」应该拿到
+	// 200，而不是一句"还没配模型"—— 那时确实没什么可重写的，报配置错只是噪音
+	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// 已有一次在跑：不重复触发，把当前画像还回去让前端接着轮询。
+	// 手动点与"分析后自动触发"共用这一道闸，否则两条路径会同时重写
+	if inflight, err := s.summaryInflight(userID); err != nil {
+		return nil, false, err
+	} else if inflight {
+		return profile, true, nil
+	}
+
+	now := time.Now()
+	if err := config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+		Updates(map[string]interface{}{
+			"summary_status":     models.SummaryStatusPending,
+			"summary_error":      "",
+			"summary_started_at": now,
+		}).Error; err != nil {
+		return nil, false, fmt.Errorf("标记总结任务失败: %w", err)
+	}
+
+	// 同步内存里的状态再返回：调用方（controller）会把这个结构体直接序列化给前端，
+	// 前端据 summaryStatus 决定要不要轮询 —— 不同步的话它会看到上面 refreshProfile
+	// 那一轮读到的旧值（done），于是永远不轮询，用户以为按钮点了没反应
+	profile.SummaryStatus = models.SummaryStatusPending
+	profile.SummaryError = ""
+	profile.SummaryStartedAt = &now
+
+	// 值拷贝传进后台：HTTP 响应正在读这个结构体序列化返回
+	go s.runSummary(userID, *settings)
+
+	return profile, false, nil
+}
+
+// summaryInflight 有没有一次总结重写正在跑。
+//
+// 判据用 summary_started_at 而不是 UpdatedAt：GET /profile 每次都会重算统计并
+// Save，UpdatedAt 被用户刷一次就顶到当下，窗口永远不过期
+func (s *ReviewMemoryService) summaryInflight(userID uint) (bool, error) {
+	var count int64
+	if err := config.DB.Model(&models.ReviewProfile{}).
+		Where("user_id = ? AND summary_status IN ? AND summary_started_at > ?",
+			userID,
+			[]string{models.SummaryStatusPending, models.SummaryStatusRunning},
+			time.Now().Add(-profileInflightWindow)).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// runSummary 在后台调模型增量重写画像总结。
+//
+// 传的是「已有总结 + 新增洞察 + 标签统计」，让模型做增量更新而不是从零重写：
+// 从零重写会让它把注意力全放在最新几手牌上，总结随最新一手牌剧烈摆动。
+func (s *ReviewMemoryService) runSummary(userID uint, settings AICallSettings) {
+	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[记忆] 总结重写 panic user=%d: %v", userID, r)
+			s.failSummary(userID, fmt.Sprintf("内部错误: %v", r))
+		}
+	}()
+
+	config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+		Update("summary_status", models.SummaryStatusRunning)
+
+	// 重读一次画像：提示词要用已有的 summary 做增量，而 refreshProfile 那次读
+	// 已经过去一段时间了
+	profile, window, err := s.refreshProfile(userID)
+	if err != nil {
+		s.failSummary(userID, "读取画像失败")
+		return
+	}
+
+	if len(profile.Leaks) == 0 && len(profile.Strengths) == 0 {
+		// 进队时还有洞察，跑到这里被删光了。无事可做，复位成 done 而不是 failed ——
+		// 这不是失败，只是没什么可写的
+		config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+			Updates(map[string]interface{}{
+				"summary_status":     models.SummaryStatusDone,
+				"summary_started_at": nil,
+			})
+		return
 	}
 
 	var newInsights []models.ReviewInsight
 	if err := config.DB.Where("user_id = ? AND id > ?", userID, profile.LastSummaryInsightID).
 		Order("id ASC").Find(&newInsights).Error; err != nil {
-		return nil, err
+		s.failSummary(userID, "读取新增洞察失败")
+		return
 	}
 
 	system, user := BuildProfileSummaryPrompt(profile, newInsights, window)
 
-	// 解析凭据排在"没有洞察就早退"（上面那个分支）之后：
-	// 空画像的用户点「重新生成总结」应该拿到 200，而不是一句"还没配模型"——
-	// 那时确实没什么可重写的，报配置错只是噪音
-	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
-	if err != nil {
-		return nil, err
-	}
-
+	// 不能用 HTTP 请求的 context：请求早已返回，ctx 一返回就被取消
 	// 不再压 max_tokens：用 K3 时推理轨迹会把它吃光、返回空内容。
 	// 长度靠两道后置约束兜住 —— 提示词里的「不超过 500 字」，
 	// 以及下面 truncateRunes 的硬截断，超出部分不会进库
-	completion, err := s.aiClient.Complete(ctx, *settings, system, user)
+	completion, err := s.aiClient.Complete(context.Background(), settings, system, user)
 	if err != nil {
-		return nil, err
+		s.failSummary(userID, err.Error())
+		return
 	}
 
 	summary := truncateRunes(strings.TrimSpace(completion.Content), SummaryMaxRunes)
 	if summary == "" {
-		return nil, fmt.Errorf("模型返回的总结为空")
+		s.failSummary(userID, "模型返回的总结为空")
+		return
 	}
 
 	var maxInsightID uint
 	if err := config.DB.Model(&models.ReviewInsight{}).
 		Where("user_id = ?", userID).
 		Select("COALESCE(MAX(id), 0)").Scan(&maxInsightID).Error; err != nil {
-		return nil, err
+		s.failSummary(userID, "读取洞察水位线失败")
+		return
 	}
 
 	now := time.Now()
-	profile.Summary = summary
-	profile.SummaryVersion++
-	profile.LastSummaryAt = &now
-	profile.LastSummaryInsightID = maxInsightID
-
-	if err := config.DB.Save(profile).Error; err != nil {
-		return nil, fmt.Errorf("保存总结失败: %w", err)
+	// 只更新标量列，**不能**把整个 profile Save 回去：这个结构体是模型调用之前读的，
+	// 期间 GET /profile 会重算统计并落库，整体写回会把 leaks/strengths/hands_reviewed
+	// 打回几分钟前。summary_version 用表达式自增而不是读-改-写，避免并发丢版本号
+	if err := config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+		Updates(map[string]interface{}{
+			"summary":                 summary,
+			"summary_version":         gorm.Expr("summary_version + 1"),
+			"last_summary_at":         now,
+			"last_summary_insight_id": maxInsightID,
+			"summary_status":          models.SummaryStatusDone,
+			"summary_error":           "",
+			"summary_started_at":      nil,
+		}).Error; err != nil {
+		s.failSummary(userID, "保存总结失败: "+err.Error())
+		return
 	}
 
-	log.Printf("[记忆] 画像总结已重写 user=%d 版本=%d 新增洞察=%d tokens=%d/%d",
-		userID, profile.SummaryVersion, len(newInsights),
-		completion.TokensIn, completion.TokensOut)
+	log.Printf("[记忆] 画像总结已重写 user=%d 新增洞察=%d tokens=%d/%d",
+		userID, len(newInsights), completion.TokensIn, completion.TokensOut)
+}
 
-	return profile, nil
+// failSummary 把总结任务标成失败。msg 会被截到 summary_error 的列宽
+func (s *ReviewMemoryService) failSummary(userID uint, msg string) {
+	log.Printf("[记忆] 总结重写失败 user=%d: %s", userID, msg)
+	config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+		Updates(map[string]interface{}{
+			"summary_status": models.SummaryStatusFailed,
+			"summary_error":  shortenMsg(msg, 500),
+		})
 }
 
 // GetOrCreateProfile 读画像，没有就建一条空的。
@@ -585,6 +740,9 @@ func (s *ReviewMemoryService) GetOrCreateProfile(userID uint) (*models.ReviewPro
 		Strengths:      []models.ProfileStrengthItem{},
 		Summary:        "",
 		SummaryVersion: 0,
+		// 显式赋值，不依赖 default tag：GORM 不回读数据库填的默认值，
+		// 留空的话前端会把它当成非终态，按钮一直转圈
+		SummaryStatus: models.SummaryStatusDone,
 	}
 	if err := config.DB.Create(&profile).Error; err != nil {
 		return nil, err

@@ -124,7 +124,7 @@ func SetupRoutes(r *gin.Engine) {
 				reviews.GET("/insights", reviewController.GetInsights)                           // 某漏洞的历史证据
 
 				// 追问对话（M5）
-				reviews.POST("/hands/:id/messages", reviewController.AskQuestion) // 追问，同步返回回复
+				reviews.POST("/hands/:id/messages", reviewController.AskQuestion) // 追问（异步），靠轮询 messages 拿回复
 				reviews.GET("/hands/:id/messages", reviewController.GetMessages)  // 对话历史
 			}
 		}

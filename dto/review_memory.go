@@ -17,6 +17,11 @@ type ReviewProfileResponse struct {
 	SummaryVersion int                          `json:"summaryVersion"`
 	// LastSummaryAt 为空表示还没生成过总结
 	LastSummaryAt *time.Time `json:"lastSummaryAt,omitempty"`
+	// SummaryStatus 总结重写任务的状态。pending/running 时前端的 Summary 是旧版本，
+	// 该显示"生成中"并轮询，而不是把旧总结当成刚生成的结果
+	SummaryStatus string `json:"summaryStatus"`
+	// SummaryError 只有 failed 时有值
+	SummaryError string `json:"summaryError,omitempty"`
 }
 
 // ToReviewProfileResponse 转换画像。
@@ -39,6 +44,8 @@ func ToReviewProfileResponse(p *models.ReviewProfile) ReviewProfileResponse {
 		Summary:        p.Summary,
 		SummaryVersion: p.SummaryVersion,
 		LastSummaryAt:  p.LastSummaryAt,
+		SummaryStatus:  p.SummaryStatus,
+		SummaryError:   p.SummaryError,
 	}
 }
 

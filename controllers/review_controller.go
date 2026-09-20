@@ -281,14 +281,18 @@ func (c *ReviewController) GetProfile(ctx *gin.Context) {
 
 // RefreshProfileSummary 手动触发画像总结重写
 //
-// 同步返回：总结的输出上限只有 800 token，比一次完整分析短得多，
-// 实测在客户端超时范围内。超时了用户重试即可，不值得为它再加一套轮询
+// 异步：立刻返回，返回体里的 summaryStatus 是 pending，真正的模型调用在后台 ——
+// 与「分析手牌」同一套，前端据 summaryStatus 轮询 GET /profile。
+// 一次 K3 调用要跑几分钟，同步接口必然被前端或网关先掐断。
+//
+// 同步报错的只剩"没配模型""画像里还没有洞察"这类；模型调用失败会落在
+// summaryStatus=failed 上，由前端展示
 func (c *ReviewController) RefreshProfileSummary(ctx *gin.Context) {
 	userID := middleware.GetUserID(ctx)
 
-	profile, err := c.memorySvc.RewriteSummary(ctx.Request.Context(), userID)
+	profile, _, err := c.memorySvc.StartSummaryRewrite(userID)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("重写总结失败: "+err.Error()))
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return
 	}
 
@@ -333,8 +337,13 @@ func (c *ReviewController) GetInsights(ctx *gin.Context) {
 
 // AskQuestion 对某手牌追问（M5 追问对话）
 //
-// 同步返回：回复限 600 token，比一次完整分析短得多，
-// 实测在客户端 60s 超时范围内，不值得为它再加一套轮询
+// 异步：立刻返回一问一答两条记录，其中 answer 是 status=pending 的占位行，
+// 真正的模型调用在后台 —— 与「分析手牌」同一套，前端据 status 轮询
+// GET /hands/:id/messages。K3 这类「始终推理」模型一次追问要跑几分钟，
+// 同步接口必然被前端或网关先掐断。
+//
+// 走到 400 的只剩「参数错 / 手牌不属于你 / 还没分析结论 / 没配模型」；
+// **模型调用失败不再走这里**，它会落在 answer 的 status=failed 上由前端展示
 func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 	handID, err := strconv.Atoi(ctx.Param("id"))
 	if err != nil || handID <= 0 {
@@ -350,9 +359,9 @@ func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 
 	userID := middleware.GetUserID(ctx)
 
-	question, answer, err := c.chatSvc.Ask(ctx.Request.Context(), userID, uint(handID), req.Content)
+	question, answer, inflight, err := c.chatSvc.Ask(userID, uint(handID), req.Content)
 	if err != nil {
-		// 归属校验失败、没有分析结论、模型调用失败都走这里，
+		// 归属校验失败、没有分析结论、没配模型都走这里，
 		// service 返回的文案已经是给用户看的
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return
@@ -361,6 +370,7 @@ func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.AskReviewMessageResponse{
 		Question: dto.ToReviewMessageResponse(question),
 		Answer:   dto.ToReviewMessageResponse(answer),
+		Inflight: inflight,
 	}))
 }
 

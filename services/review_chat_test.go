@@ -148,3 +148,99 @@ func TestFormatAnalysisForChat_UnknownVerdictFallsBack(t *testing.T) {
 		t.Errorf("未知档位应原样展示而不是丢掉，实际:\n%s", got)
 	}
 }
+
+// ---------- pairHistory：只保留成对的一问一答 ----------
+
+func msg(role, content string) models.ReviewMessage {
+	return models.ReviewMessage{Role: role, Content: content}
+}
+
+// 助手回复的构造：只有 done 且非空的行才会进入配对，所以这里统一给 done
+func assistantMsg(content string) models.ReviewMessage {
+	m := msg(models.MessageRoleAssistant, content)
+	m.Status = models.MessageStatusDone
+	return m
+}
+
+func TestPairHistory_KeepsCompletePairs(t *testing.T) {
+	in := []models.ReviewMessage{
+		msg(models.MessageRoleUser, "问一"),
+		assistantMsg("答一"),
+		msg(models.MessageRoleUser, "问二"),
+		assistantMsg("答二"),
+	}
+
+	got := pairHistory(in)
+	if len(got) != 4 {
+		t.Fatalf("完整的两轮应当原样保留，实际 %d 条", len(got))
+	}
+	// 顺序也必须保持，模型看到的对话得是正着的
+	for i, want := range []string{"问一", "答一", "问二", "答二"} {
+		if got[i].Content != want {
+			t.Errorf("第 %d 条 = %q，期望 %q", i, got[i].Content, want)
+		}
+	}
+}
+
+func TestPairHistory_DropsDanglingUser(t *testing.T) {
+	// 最后一问还没有回答 —— 正是异步之后"当前这一轮"的样子。
+	// 它必须被丢掉，否则模型会以为自己在跟一个没答完的问题对话
+	in := []models.ReviewMessage{
+		msg(models.MessageRoleUser, "问一"),
+		assistantMsg("答一"),
+		msg(models.MessageRoleUser, "还没答的这一问"),
+	}
+
+	got := pairHistory(in)
+	if len(got) != 2 {
+		t.Fatalf("孤立的问题应当被丢掉，实际留下 %d 条", len(got))
+	}
+	if got[1].Content != "答一" {
+		t.Errorf("留下的应当是完整的那一轮，实际 %q", got[1].Content)
+	}
+}
+
+func TestPairHistory_DropsLeadingAssistant(t *testing.T) {
+	// 截断边界上可能出现"问题被切在窗外、只剩回答"的孤儿
+	in := []models.ReviewMessage{
+		assistantMsg("孤儿回答"),
+		msg(models.MessageRoleUser, "问一"),
+		assistantMsg("答一"),
+	}
+
+	got := pairHistory(in)
+	if len(got) != 2 {
+		t.Fatalf("开头的孤儿回答应当被丢掉，实际留下 %d 条", len(got))
+	}
+	if got[0].Content != "问一" {
+		t.Errorf("留下的应当是从第一问开始的完整一轮，实际 %q", got[0].Content)
+	}
+}
+
+func TestPairHistory_DropsQuestionAfterFailedAnswer(t *testing.T) {
+	// 失败的那一问后面跟的不是回答（失败行的 content 会被清空，
+	// 于是被 recentHistory 的 content <> '' 滤掉），这里模拟它已经不在流里
+	in := []models.ReviewMessage{
+		msg(models.MessageRoleUser, "问一"),
+		assistantMsg("答一"),
+		msg(models.MessageRoleUser, "失败掉的那一问"),
+		msg(models.MessageRoleUser, "重新问的一问"),
+		assistantMsg("答二"),
+	}
+
+	got := pairHistory(in)
+	if len(got) != 4 {
+		t.Fatalf("应当保留成功的那两轮，实际 %d 条", len(got))
+	}
+	for _, m := range got {
+		if m.Content == "失败掉的那一问" {
+			t.Error("失败掉的那一问不应进入上下文")
+		}
+	}
+}
+
+func TestPairHistory_Empty(t *testing.T) {
+	if got := pairHistory(nil); len(got) != 0 {
+		t.Errorf("空输入应当返回空，实际 %d 条", len(got))
+	}
+}
