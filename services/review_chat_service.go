@@ -55,10 +55,13 @@ func NewReviewChatService() *ReviewChatService {
 // 与「分析手牌」同一套。K3 这类「始终推理」模型一次追问要跑几分钟，同步接口
 // 必然被前端或网关先掐断。
 //
+// 追问绑定的是**一次分析**（analysisID），不是手牌：手牌被改过并重新分析后，
+// 新结论是另一条 analysis，旧对话自然不再属于它
+//
 // 返回的 assistant 记录 status=pending、content 为空，前端据 status 轮询。
-// inflight=true 表示没有新建，返回的是这手牌正在跑的那对（重复提交被挡住了）
+// inflight=true 表示没有新建，返回的是这次分析正在跑的那对（重复提交被挡住了）
 func (s *ReviewChatService) Ask(
-	userID, handID uint,
+	userID, analysisID uint,
 	question string,
 ) (questionMsg, answerMsg *models.ReviewMessage, inflight bool, err error) {
 	question = strings.TrimSpace(question)
@@ -69,22 +72,22 @@ func (s *ReviewChatService) Ask(
 		return nil, nil, false, fmt.Errorf("追问不能超过 %d 字", ChatMessageMaxRunes)
 	}
 
-	// GetHand 自带归属校验，拿着别人的 hand_id 只会得到"不存在"
-	hand, err := s.reviewService.GetHand(userID, handID)
-	if err != nil {
-		return nil, nil, false, err
-	}
-
 	// 没有分析结论就不能追问：追问是"基于结论的提问"，没结论可问。
-	// 这一次的 analysis_id 会写进下面两条消息，后台按 id 钉住它
-	analysis, err := s.latestDoneAnalysis(userID, handID)
+	// 归属校验也在这一步，拿着别人的 analysis_id 只会得到"不存在"
+	analysis, err := s.loadAnalysis(userID, analysisID)
 	if err != nil {
 		return nil, nil, false, err
 	}
 
-	// 这手牌已有追问在跑：把那一对原样还回去，不要再起一次模型调用。
+	// 手牌用来拼提示词。analysis 的归属上一步已经验过，这里取它指向的那手牌
+	hand, err := s.reviewService.GetHand(userID, analysis.HandID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	// 这次分析已有追问在跑：把那一对原样还回去，不要再起一次模型调用。
 	// 追问不计额度，但一次 K3 追问是几分钟的和真金白银，重复提交不该并行烧两份
-	if pair, found, err := s.inflightPair(userID, handID); err != nil {
+	if pair, found, err := s.inflightPair(userID, analysisID, analysis.HandID); err != nil {
 		return nil, nil, false, err
 	} else if found {
 		return pair[0], pair[1], true, nil
@@ -98,8 +101,9 @@ func (s *ReviewChatService) Ask(
 	}
 
 	userMsg := &models.ReviewMessage{
-		UserID:     userID,
-		HandID:     handID,
+		UserID: userID,
+		// HandID 保留写入：对话按 AnalysisID 绑定，但手牌是溯源与按手牌清理的依据
+		HandID:     analysis.HandID,
 		AnalysisID: analysis.ID,
 		Role:       models.MessageRoleUser,
 		Content:    question,
@@ -109,7 +113,7 @@ func (s *ReviewChatService) Ask(
 	}
 	assistantMsg := &models.ReviewMessage{
 		UserID:     userID,
-		HandID:     handID,
+		HandID:     analysis.HandID,
 		AnalysisID: analysis.ID,
 		Role:       models.MessageRoleAssistant,
 		Content:    "",
@@ -165,7 +169,7 @@ func (s *ReviewChatService) answer(
 		return
 	}
 
-	history, err := s.recentHistory(userMsg.UserID, userMsg.HandID)
+	history, err := s.recentHistory(userMsg.UserID, userMsg.AnalysisID)
 	if err != nil {
 		s.failMessage(assistantID, "读取对话历史失败")
 		return
@@ -215,17 +219,17 @@ func (s *ReviewChatService) failMessage(msgID uint, msg string) {
 		})
 }
 
-// ListMessages 读某手牌的完整对话，按时间升序。
-// 同样先校验手牌归属，避免用别人的 hand_id 探到对话内容
-func (s *ReviewChatService) ListMessages(userID, handID uint) ([]models.ReviewMessage, error) {
-	if _, err := s.reviewService.GetHand(userID, handID); err != nil {
+// ListMessages 读某次分析的完整对话，按时间升序。
+// 同样先校验分析归属，避免用别人的 analysis_id 探到对话内容
+func (s *ReviewChatService) ListMessages(userID, analysisID uint) ([]models.ReviewMessage, error) {
+	if _, err := s.loadAnalysis(userID, analysisID); err != nil {
 		return nil, err
 	}
 
-	s.reapStuckMessages(userID, handID)
+	s.reapStuckMessages(userID, analysisID)
 
 	var messages []models.ReviewMessage
-	if err := config.DB.Where("user_id = ? AND hand_id = ?", userID, handID).
+	if err := config.DB.Where("user_id = ? AND analysis_id = ?", userID, analysisID).
 		Order("id ASC").Find(&messages).Error; err != nil {
 		return nil, err
 	}
@@ -240,29 +244,31 @@ func (s *ReviewChatService) ListMessages(userID, handID uint) ([]models.ReviewMe
 // 读接口顺手写状态看起来越界，但语义上等同于刷新一次物化视图（同 GetProfile
 // 的先例）：这些行的后台 goroutine 已经随重启消失或卡死了，不在这里收掉，
 // 前端会因为"存在非终态消息"而永远禁用输入框 —— 用户既拿不到结果，也没法重问
-func (s *ReviewChatService) reapStuckMessages(userID, handID uint) {
+func (s *ReviewChatService) reapStuckMessages(userID, analysisID uint) {
 	if err := config.DB.Model(&models.ReviewMessage{}).
-		Where("user_id = ? AND hand_id = ? AND role = ? AND status IN ? AND created_at < ?",
-			userID, handID, models.MessageRoleAssistant,
+		Where("user_id = ? AND analysis_id = ? AND role = ? AND status IN ? AND created_at < ?",
+			userID, analysisID, models.MessageRoleAssistant,
 			[]string{models.MessageStatusPending, models.MessageStatusRunning},
 			time.Now().Add(-chatInflightWindow)).
 		Updates(map[string]interface{}{
 			"status":    models.MessageStatusFailed,
 			"error_msg": chatInterruptedMsg,
 		}).Error; err != nil {
-		log.Printf("[追问] 回收中断任务失败 hand=%d: %v", handID, err)
+		log.Printf("[追问] 回收中断任务失败 analysis=%d: %v", analysisID, err)
 	}
 }
 
-// inflightPair 该手牌正在跑的那一对消息，第二个返回值为 false 表示没有在跑的追问。
+// inflightPair 这次分析正在跑的那一对消息，第二个返回值为 false 表示没有在跑的追问。
 //
 // 认 pending/running 但**加时间窗**：分析跑到一半重启服务，后台 goroutine 随进程
-// 一起没了，那条记录会永远停在 running。无条件认它，这手牌就再也问不了了
-func (s *ReviewChatService) inflightPair(userID, handID uint) ([]*models.ReviewMessage, bool, error) {
+// 一起没了，那条记录会永远停在 running。无条件认它，这次分析就再也问不了了
+//
+// handID 只用来补全下面构造的兜底问题行，不参与过滤
+func (s *ReviewChatService) inflightPair(userID, analysisID, handID uint) ([]*models.ReviewMessage, bool, error) {
 	var assistant models.ReviewMessage
 	err := config.DB.Where(
-		"user_id = ? AND hand_id = ? AND role = ? AND status IN ? AND created_at > ?",
-		userID, handID, models.MessageRoleAssistant,
+		"user_id = ? AND analysis_id = ? AND role = ? AND status IN ? AND created_at > ?",
+		userID, analysisID, models.MessageRoleAssistant,
 		[]string{models.MessageStatusPending, models.MessageStatusRunning},
 		time.Now().Add(-chatInflightWindow),
 	).Order("id DESC").First(&assistant).Error
@@ -276,8 +282,8 @@ func (s *ReviewChatService) inflightPair(userID, handID uint) ([]*models.ReviewM
 
 	// 配对的问题行：占位行的 id 一定大于它对应的那一问
 	var question models.ReviewMessage
-	if err := config.DB.Where("user_id = ? AND hand_id = ? AND role = ? AND id < ?",
-		userID, handID, models.MessageRoleUser, assistant.ID).
+	if err := config.DB.Where("user_id = ? AND analysis_id = ? AND role = ? AND id < ?",
+		userID, analysisID, models.MessageRoleUser, assistant.ID).
 		Order("id DESC").First(&question).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, false, err
@@ -300,11 +306,11 @@ func (s *ReviewChatService) inflightPair(userID, handID uint) ([]*models.ReviewM
 // Limit 取 ChatHistoryLimit 的两倍，因为 LIMIT 在配对**之前**生效 ——
 // 截断边界上可能凑不成对（最老的那条是 assistant，它的问题被切在窗外），
 // 配完再截回 ChatHistoryLimit。ChatHistoryLimit 是偶数，从尾部截不会切散成对的消息
-func (s *ReviewChatService) recentHistory(userID, handID uint) ([]models.ReviewMessage, error) {
+func (s *ReviewChatService) recentHistory(userID, analysisID uint) ([]models.ReviewMessage, error) {
 	var messages []models.ReviewMessage
 	if err := config.DB.Where(
-		"user_id = ? AND hand_id = ? AND status = ? AND content <> ''",
-		userID, handID, models.MessageStatusDone,
+		"user_id = ? AND analysis_id = ? AND status = ? AND content <> ''",
+		userID, analysisID, models.MessageStatusDone,
 	).Order("id DESC").Limit(ChatHistoryLimit * 2).Find(&messages).Error; err != nil {
 		return nil, err
 	}
@@ -344,19 +350,23 @@ func pairHistory(msgs []models.ReviewMessage) []models.ReviewMessage {
 	return paired
 }
 
-// latestDoneAnalysis 取该手牌最近一次成功的分析。
-// 没有分析就不能追问 —— 追问是"基于结论的提问"，没结论可问
-func (s *ReviewChatService) latestDoneAnalysis(userID, handID uint) (*models.ReviewAnalysis, error) {
+// loadAnalysis 按 id 取一次可追问的分析，顺带完成归属校验。
+//
+// 必须带 user_id 查：analysis_id 是前端传上来的，不校验归属就能拿别人的 id
+// 探到别人的对话。status 也在这里判 —— 追问是"基于结论的提问"，没结论可问
+func (s *ReviewChatService) loadAnalysis(userID, analysisID uint) (*models.ReviewAnalysis, error) {
 	var analysis models.ReviewAnalysis
-	err := config.DB.Where("user_id = ? AND hand_id = ? AND status = ?",
-		userID, handID, models.AnalysisStatusDone).
-		Order("id DESC").First(&analysis).Error
+	err := config.DB.Where("id = ? AND user_id = ?", analysisID, userID).
+		First(&analysis).Error
 
-	if err == gorm.ErrRecordNotFound {
-		return nil, fmt.Errorf("这手牌还没有分析结论，先分析一次再来追问")
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("分析记录不存在")
 	}
 	if err != nil {
 		return nil, err
+	}
+	if analysis.Status != models.AnalysisStatusDone {
+		return nil, fmt.Errorf("这次分析还没有结论，等分析完成后再追问")
 	}
 	return &analysis, nil
 }

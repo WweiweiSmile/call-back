@@ -335,19 +335,22 @@ func (c *ReviewController) GetInsights(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.ReviewInsightListResponse{List: list}))
 }
 
-// AskQuestion 对某手牌追问（M5 追问对话）
+// AskQuestion 对某次分析追问（M5 追问对话）
 //
 // 异步：立刻返回一问一答两条记录，其中 answer 是 status=pending 的占位行，
 // 真正的模型调用在后台 —— 与「分析手牌」同一套，前端据 status 轮询
-// GET /hands/:id/messages。K3 这类「始终推理」模型一次追问要跑几分钟，
+// GET /analyses/:id/messages。K3 这类「始终推理」模型一次追问要跑几分钟，
 // 同步接口必然被前端或网关先掐断。
 //
-// 走到 400 的只剩「参数错 / 手牌不属于你 / 还没分析结论 / 没配模型」；
+// 追问绑定的是一次分析而不是手牌：手牌被改过并重新分析后是新的一条 analysis，
+// 旧对话不会跟过来
+//
+// 走到 400 的只剩「参数错 / 分析不属于你 / 还没分析结论 / 没配模型」；
 // **模型调用失败不再走这里**，它会落在 answer 的 status=failed 上由前端展示
 func (c *ReviewController) AskQuestion(ctx *gin.Context) {
-	handID, err := strconv.Atoi(ctx.Param("id"))
-	if err != nil || handID <= 0 {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的手牌ID"))
+	analysisID, err := strconv.Atoi(ctx.Param("id"))
+	if err != nil || analysisID <= 0 {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的分析ID"))
 		return
 	}
 
@@ -359,7 +362,7 @@ func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 
 	userID := middleware.GetUserID(ctx)
 
-	question, answer, inflight, err := c.chatSvc.Ask(userID, uint(handID), req.Content)
+	question, answer, inflight, err := c.chatSvc.Ask(userID, uint(analysisID), req.Content)
 	if err != nil {
 		// 归属校验失败、没有分析结论、没配模型都走这里，
 		// service 返回的文案已经是给用户看的
@@ -374,17 +377,17 @@ func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 	}))
 }
 
-// GetMessages 某手牌的对话历史
+// GetMessages 某次分析的对话历史
 func (c *ReviewController) GetMessages(ctx *gin.Context) {
-	handID, err := strconv.Atoi(ctx.Param("id"))
-	if err != nil || handID <= 0 {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的手牌ID"))
+	analysisID, err := strconv.Atoi(ctx.Param("id"))
+	if err != nil || analysisID <= 0 {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的分析ID"))
 		return
 	}
 
 	userID := middleware.GetUserID(ctx)
 
-	messages, err := c.chatSvc.ListMessages(userID, uint(handID))
+	messages, err := c.chatSvc.ListMessages(userID, uint(analysisID))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, dto.ErrorResponse(err.Error()))
 		return
