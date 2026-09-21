@@ -18,7 +18,12 @@ const (
 // v1.2（M7.1）：对手块列出全部对手（带名字与位置），行动序列里的对手写成
 // "老王 (CO)" 而不是笼统的 "Villain"。老手牌的输出与 v1.1 逐字一致，所以
 // 跨版本的结论仍然可比 —— 变的只是新录入手牌的对手信息颗粒度
-const CurrentPromptVersion = "v1.2"
+//
+// v2.0：系统提示词注入《小绿皮书》方法论（services/coach_methodology.go），
+// 追问对话共用同一套口径；输出 Schema 增加 opponentRead 与 actionAdvice 两个
+// 字段。这是**不向后兼容**的一次变更：v2.0 之前的分析结果里这两个字段为空，
+// 前端必须容忍缺失（按可选字段处理），跨版本的结论也不再直接可比。
+const CurrentPromptVersion = "v3.0-skills"
 
 // 结构化分析结果。
 //
@@ -50,6 +55,71 @@ type AnalysisResult struct {
 
 	// Drills 下次的练习建议
 	Drills []string `json:"drills"`
+
+	// OpponentRead 对手形象与手牌范围推断。
+	//
+	// 这是 M7 之后新增的分析维度：让教练先"读人"再点评，而不是直接讲这手牌
+	// 该怎么打。指针 + omitempty：v2.0 之前的存量分析没有这个字段，用零值
+	// 空结构体会让前端无法区分"没推断"和"推断为空"
+	OpponentRead *OpponentRead `json:"opponentRead,omitempty"`
+
+	// ActionAdvice 逐街的行动建议（下注/加注/过牌/弃牌 + 尺度）。
+	//
+	// 与 Alternatives 的区别：Alternatives 是"事后看还有哪些线路"，
+	// ActionAdvice 是"当时就该这么打"的正面答案，带具体尺度数字
+	ActionAdvice []ActionAdviceItem `json:"actionAdvice,omitempty"`
+}
+
+// 对手形象的五格分类。与提示词里的枚举一一对应
+const (
+	ProfileLoosePassive    = "loosePassive"    // 松弱，跟注站
+	ProfileTightPassive    = "tightPassive"    // 紧弱，岩石
+	ProfileLooseAggressive = "looseAggressive" // 松凶，LAG
+	ProfileTightAggressive = "tightAggressive" // 紧凶，TAG
+	// ProfileUnknown 样本不足时的兜底。刻意用它而不是留空字符串：
+	// "不知道"本身是一个结论，前端要显式展示出来提醒用户补信息
+	ProfileUnknown = "unknown"
+)
+
+// OpponentRead 对手形象与范围推断
+type OpponentRead struct {
+	// Profile 五格形象之一，取值见 Profile* 常量
+	Profile string `json:"profile"`
+
+	// ProfileReason 归类的依据，必须引用本手牌里对手的实际行动
+	ProfileReason string `json:"profileReason"`
+
+	// Streets 逐街的范围变化
+	Streets []RangeStreetItem `json:"streets"`
+
+	// Conclusion 范围倾向的量级结论。
+	// 刻意用文字而不是结构化概率：模型给不出可靠的概率分布，
+	// 强制它填数字只会产出一堆精确的假数据
+	Conclusion string `json:"conclusion"`
+}
+
+// RangeStreetItem 单条街的范围变化
+type RangeStreetItem struct {
+	Street string `json:"street"`
+	// Action 对手在这一街做了什么，用于把范围变化锚定到具体动作
+	Action string `json:"action"`
+	// RangeKept 这个行动保留了他范围里的哪些牌
+	RangeKept string `json:"rangeKept"`
+	// RangeDropped 去掉了哪些牌
+	RangeDropped string `json:"rangeDropped"`
+}
+
+// ActionAdviceItem 单条街的行动建议
+type ActionAdviceItem struct {
+	Street string `json:"street"`
+	// Action 建议的动作：bet / raise / check / fold
+	Action string `json:"action"`
+	// Sizing 具体尺度，如 "1/2池(12BB)"。提示词明确禁止没有数字的表述
+	Sizing string `json:"sizing"`
+	// Reason 依据哪条原则
+	Reason string `json:"reason"`
+	// TargetProfile 针对哪个形象、利用哪个倾向
+	TargetProfile string `json:"targetProfile"`
 }
 
 // StreetAnalysisItem 单条街的评价

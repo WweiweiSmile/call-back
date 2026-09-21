@@ -3,6 +3,7 @@ package controllers
 import (
 	"call-go/dto"
 	"call-go/middleware"
+	"call-go/models"
 	"call-go/services"
 	"net/http"
 	"strconv"
@@ -240,8 +241,12 @@ func (c *ReviewController) GetHandAnalyses(ctx *gin.Context) {
 	items := make([]dto.ReviewAnalysisResponse, 0, len(list))
 	for i := range list {
 		resp := dto.ToReviewAnalysisResponse(&list[i])
-		// 指纹不一致说明这手牌改过了，这条结论不再对应当前内容
-		resp.Stale = list[i].ContentHash != "" && list[i].ContentHash != hand.ContentHash
+		// 两种「这条结论不再对应当前情况」：
+		//  1. 指纹不一致 —— 这手牌的内容改过了
+		//  2. 提示词版本不一致 —— 技能库改过版，依据本身变了。
+		//     只提示、不自动重跑：一手牌几分钟、要花钱，重不重跑由用户决定
+		resp.Stale = (list[i].ContentHash != "" && list[i].ContentHash != hand.ContentHash) ||
+			(list[i].PromptVersion != "" && list[i].PromptVersion != models.CurrentPromptVersion)
 		items = append(items, resp)
 	}
 
