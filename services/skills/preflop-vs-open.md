@@ -1,4 +1,4 @@
-> 来源：《小绿皮书》方法论 §六、翻前的关键数字（拆自 core-methodology.md，正文未改动）。
+> 来源：《小绿皮书》方法论 §六、翻前的关键数字（拆自 `coachMethodology` 原文，正文未改动）。
 
 - 压制关系：AK vs AQ 约 74%；AK vs 72 只有 67%；AK vs QJ 只有 65%。
   87s 对上 AA/KK/AKs/AQs 约 32%，而 AJ 只有 25.7%。

@@ -125,7 +125,7 @@ var skillDefs = []skillDef{
 		Code:     "odds-table",
 		Title:    "赔率与概率速查",
 		When:     "任何要算赔率、outs 或成牌概率的地方",
-		Summary:  "1/2 池需 25% 胜率、1 倍池需 33%、2 倍池需 40%；转牌面对 1/2 池以上的下注，用任何听牌跟注都是错的",
+		Summary:  "1/3 池需 20% 胜率、1/2 池 25%、1 倍池 33%、2 倍池 40%；转牌面对 1/2 池以上的下注，用任何听牌跟注都是错的",
 		Priority: 95,
 		Trigger:  SkillTrigger{Always: true},
 		file:     "skills/odds-table.md",
@@ -707,6 +707,29 @@ func SkillBodyRunes(selected []Skill) int {
 		n += len([]rune(s.body))
 	}
 	return n
+}
+
+// LogSkillLayerSizes 记录技能层两层的真实体量，返回 (目录层字数, 正文层字数)。
+// 调用点在 BuildSystemPrompt 拼完技能层之后 —— 它**不改变任何输出**，只观测。
+//
+// **刻意不设数值上限。** 曾经定过两档（目录 900 / 正文 4000），但两个数字都站不住：
+// 正文那边常驻两篇（core-stance 1280 + odds-table 2000）自己就占 3280 字，
+// **展开第 1 篇非常驻技能就超顶**，等于每次分析都响；目录那边只在简单手牌
+// （展开 ≤4 篇，★ 行少所以目录长）上响。**一条常态触发的告警等于没有告警。**
+//
+// 所以改成每手牌记录真实体量：要定阈值的时候，先拿一段时间序列出来看，
+// 而不是拍一个数字然后让它天天响。
+func LogSkillLayerSizes(catalog string, selected []Skill) (catalogRunes, bodyRunes int) {
+	resident := 0
+	for _, s := range selected {
+		if s.Trigger.Always {
+			resident++
+		}
+	}
+	catalogRunes, bodyRunes = len([]rune(catalog)), SkillBodyRunes(selected)
+	log.Printf("技能层体量：目录 %d 字 + 正文 %d 字 = %d 字（常驻 %d 篇，本次展开 %d 篇）",
+		catalogRunes, bodyRunes, catalogRunes+bodyRunes, resident, len(selected))
+	return
 }
 
 // ---------- 小工具 ----------

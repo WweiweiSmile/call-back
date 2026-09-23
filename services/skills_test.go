@@ -791,3 +791,29 @@ func TestExpandedCapDropsLeastRelevant(t *testing.T) {
 		t.Errorf("篇数超限时应当先裁翻前细则，实际展开 %v", got)
 	}
 }
+
+// 体量日志只观测：返回值是两层的真实字数，且**传入的技能一个字都不能少**。
+// 这里没有阈值可断言 —— 数值上限是刻意移除的（见 LogSkillLayerSizes 的注释）
+func TestLogSkillLayerSizesObservesWithoutTrimming(t *testing.T) {
+	sel := []Skill{
+		{Code: "r", Trigger: SkillTrigger{Always: true}, body: strings.Repeat("字", 7)},
+		{Code: "a", body: strings.Repeat("字", 5)},
+	}
+	before := []string{sel[0].body, sel[1].body}
+
+	cat, body := LogSkillLayerSizes(strings.Repeat("目", 11), sel)
+	if cat != 11 {
+		t.Errorf("目录层字数 = %d，期望 11", cat)
+	}
+	if body != 12 {
+		t.Errorf("正文层字数 = %d，期望 12（7+5）", body)
+	}
+	if len(sel) != 2 {
+		t.Errorf("技能被裁掉了：剩 %d 篇，期望 2", len(sel))
+	}
+	for i := range sel {
+		if sel[i].body != before[i] {
+			t.Errorf("第 %d 篇正文被改动：%q → %q", i, before[i], sel[i].body)
+		}
+	}
+}

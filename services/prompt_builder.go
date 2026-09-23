@@ -177,9 +177,12 @@ func BuildSystemPrompt(hand *models.ReviewHand, tags []models.ReviewLeakTag) str
 	// 挑哪几篇由 SelectSkills 按手牌场景决定，见 skills.go 与 教练技能库设计文档.md
 	allSkills := AllSkills()
 	selected := SelectSkills(allSkills, hand)
-	sb.WriteString(RenderSkillCatalog(allSkills, selected))
+	catalog := RenderSkillCatalog(allSkills, selected)
+	sb.WriteString(catalog)
 	sb.WriteString("\n")
 	sb.WriteString(RenderSkillBlock(selected))
+	// 技能层体量留痕。只观测不裁剪、也不设阈值 —— 定阈值前先积累一段时间序列
+	LogSkillLayerSizes(catalog, selected)
 	sb.WriteString(`
 
 ## 安全声明
@@ -412,6 +415,10 @@ func BuildMemoryBlock(memory *MemoryContext) string {
 // 追问与首次分析共用同一套方法论来源（coachMethodologyBrief），否则会出现
 // "分析时按小绿皮书说该下注、追问时又按另一套口径说该过牌"的自相矛盾。
 // 这里用的是精简版：追问要求 300 字以内，全量方法论会把模型带向长篇输出。
+//
+// 注意：分析路径已改读 skills/*.md（14 篇，按手牌场景展开），两条路径现在只共用
+// **同源**（都出自《小绿皮书》），**不再是同一份产物** —— 所以只能保证口径不冲突，
+// 保证不了粒度一致。差距清单与取舍见 教练技能库设计文档.md §11.1。
 func BuildChatSystemPrompt() string {
 	return `你是一位德州扑克教练。学员已经看过你对他这手牌的复盘，现在要追问细节。
 
