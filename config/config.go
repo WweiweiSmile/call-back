@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -42,10 +45,17 @@ type Config struct {
 var AppConfig *Config
 
 func LoadConfig() error {
-	// 尝试加载 .env 文件（如果存在）
-	err := godotenv.Load()
+	envFile, tried, err := locateEnvFile()
 	if err != nil {
-		log.Println("Warning: .env file not found, using environment variables")
+		return err
+	}
+	if envFile == "" {
+		// 没有 .env 是合法的部署方式（全靠环境变量），不是错误。
+		// 但要把找过哪些地方写进启动日志 —— 生产上「.env 明明放了却没生效」
+		// 这一类问题全靠这一行定位
+		log.Printf("Warning: 没找到 .env（找过 %v），改用环境变量", tried)
+	} else if err := godotenv.Load(envFile); err != nil {
+		return fmt.Errorf("加载 %s 失败: %w", envFile, err)
 	}
 
 	apiKey := GetEnv("DEEPSEEK_API_KEY", "")
@@ -81,6 +91,54 @@ func LoadConfig() error {
 
 	log.Println("Config loaded successfully")
 	return nil
+}
+
+// envFileOverride 显式指定 .env 路径的环境变量名。
+//
+// 为什么需要它：`godotenv.Load()` 不带参数时只认进程的 CWD，而部署环境
+// （宝塔面板 / systemd）拉起的进程 CWD 往往不是项目目录 —— 于是整个 .env
+// **静默失效**，服务用一堆默认值起来、连到错误的数据库，而且不报任何错。
+// 这个变量让部署方可以明确指定路径，不依赖启动方式。
+const envFileOverride = "ENV_FILE"
+
+// candidateEnvFiles 返回 .env 的候选位置，按优先级排列。
+//
+// 可执行文件目录排在 CWD 之前：二进制所在目录更接近「应用的家」，
+// 而 CWD 只是启动方式的副产物（`go run .` 与从别处调起同一个二进制，
+// CWD 完全不同）。CWD 的 .env 作为兜底排在最后。
+func candidateEnvFiles() []string {
+	exe, err := os.Executable()
+	if err != nil {
+		// 理论上不会发生。真发生了就只剩 CWD 一个候选 —— 有总比没有好
+		return []string{".env"}
+	}
+	return []string{filepath.Join(filepath.Dir(exe), ".env"), ".env"}
+}
+
+// locateEnvFile 定位 .env 文件。
+//
+// 返回（命中的路径，尝试过的候选，错误）：
+//
+//   - ENV_FILE 显式指定时**只认它**，读不到就报错。这里刻意不退回候选列表：
+//     部署方明明配了路径、服务却按默认值起来，是比启动失败难查得多的问题。
+//     值会先裁掉首尾空白 —— 从面板输入框里粘出来的路径常带空白。
+//   - 没指定时按候选顺序找。都没有是**合法**的部署方式（全靠环境变量），
+//     返回空路径 + 全部候选，由调用方写进启动日志。
+func locateEnvFile() (string, []string, error) {
+	if override := strings.TrimSpace(os.Getenv(envFileOverride)); override != "" {
+		if _, err := os.Stat(override); err != nil {
+			return "", nil, fmt.Errorf("%s 指向的 %s 读不到: %w", envFileOverride, override, err)
+		}
+		return override, nil, nil
+	}
+
+	candidates := candidateEnvFiles()
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil, nil
+		}
+	}
+	return "", candidates, nil
 }
 
 func GetEnv(key string, defaultValue string) string {

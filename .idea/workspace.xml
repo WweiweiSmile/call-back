@@ -5,29 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 提示词优化">
-      <change afterPath="$PROJECT_DIR$/services/coach_methodology.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/core-stance.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/mindset.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/odds-table.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/opponent-read.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/postflop-cbet.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/postflop-draw.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/postflop-made-hand.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/postflop-multiway.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/postflop-turn.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/preflop-3bet-pot.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/preflop-open.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/preflop-vs-open.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/river-medium.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills/river-value.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/services/skills_test.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/hand_strength.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/hand_strength_test.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/review_analysis.go" beforeDir="false" afterPath="$PROJECT_DIR$/models/review_analysis.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/prompt_builder.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/prompt_builder.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/prompt_builder_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/prompt_builder_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -122,7 +101,19 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
