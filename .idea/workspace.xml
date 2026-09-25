@@ -4,16 +4,11 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: env 文件加载优化">
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 添加赔率计算表">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/coach_methodology.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/coach_methodology.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/prompt_builder.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/prompt_builder.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/skills.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/skills/odds-table.md" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills/odds-table.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/skills/preflop-3bet-pot.md" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills/preflop-3bet-pot.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/skills/preflop-open.md" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills/preflop-open.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/skills/preflop-vs-open.md" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills/preflop-vs-open.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/skills_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/services/skills_test.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -146,6 +141,7 @@
     <MESSAGE value="refactor: 教练对话跟手牌复盘分析进行绑定" />
     <MESSAGE value="refactor: 提示词优化" />
     <MESSAGE value="refactor: env 文件加载优化" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: env 文件加载优化" />
+    <MESSAGE value="refactor: 添加赔率计算表" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: 添加赔率计算表" />
   </component>
 </project>
