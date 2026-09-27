@@ -2,6 +2,7 @@ package utils
 
 import (
 	"call-go/models"
+	"strings"
 	"testing"
 )
 
@@ -299,6 +300,98 @@ func TestComputeHandHash(t *testing.T) {
 	h6.HeroPosition = models.PositionHJ
 	if ComputeHandHash(h1) == ComputeHandHash(h6) {
 		t.Error("人数变化必须改变哈希")
+	}
+}
+
+// 对手底牌不进手牌分析的提示词，就不该进内容指纹。
+//
+// 它若进了指纹，用户补录一次"摊牌时看到的对手底牌"就会让已有分析失效、
+// 白花一次模型额度，而重算结果与原来一模一样 —— 纯亏损。
+func TestComputeHandHashIgnoresVillainCards(t *testing.T) {
+	withVillain := func(cards string) *models.ReviewHand {
+		h := validHand()
+		h.Villains = []models.VillainInfo{
+			{Name: "老王", Position: models.PositionCO, IsKey: true, Cards: cards},
+		}
+		return h
+	}
+
+	baseHash := ComputeHandHash(withVillain(""))
+	if ComputeHandHash(withVillain("JdTc")) != baseHash {
+		t.Error("补录对手底牌后指纹必须不变：它不进提示词，重算结果也一样")
+	}
+
+	// 反向确认：对手的名字/位置**会**进提示词，改了必须换指纹。
+	// 没有这一条的话，上面那个断言用一个恒返回常量的实现也能通过
+	renamed := withVillain("")
+	renamed.Villains[0].Name = "小李"
+	if ComputeHandHash(renamed) == baseHash {
+		t.Error("改对手名字必须改变指纹")
+	}
+
+	moved := withVillain("")
+	moved.Villains[0].Position = models.PositionHJ
+	if ComputeHandHash(moved) == baseHash {
+		t.Error("改对手位置必须改变指纹")
+	}
+}
+
+// 对手底牌是拿去建画像的，错一条就会污染整个画像，所以校验口径与 hero 底牌对齐
+func TestValidateReviewHand_VillainCards(t *testing.T) {
+	// validHand 的底牌是 AsKh、公牌是 Qs7h2d，下面几例刻意拿它们来撞车
+	cases := []struct {
+		name     string
+		villain  string
+		cards    string
+		position string
+		wantErr  string
+	}{
+		{name: "合法底牌", villain: "老王", cards: "JdTc", position: models.PositionCO},
+		{name: "留空表示没看到", villain: "老王", cards: "", position: models.PositionCO},
+		{name: "小写与空格会被规范化", villain: "老王", cards: "jd tc", position: models.PositionCO},
+		{name: "只有一张", villain: "老王", cards: "Jd", position: models.PositionCO, wantErr: "必须是 2 张"},
+		// NormalizeCards 会把认不出的字符丢掉，所以 "JxTc" 会退化成 3 个字符、
+		// 由张数那道闸拦下 —— 与 hero 底牌走的是同一条路径
+		{name: "非法点数被丢字符后按张数拦下", villain: "老王", cards: "JxTc", position: models.PositionCO, wantErr: "必须是 2 张"},
+		{name: "与公牌撞车", villain: "老王", cards: "QsTc", position: models.PositionCO, wantErr: "重复的牌"},
+		{name: "与我的底牌撞车", villain: "老王", cards: "AsTc", position: models.PositionCO, wantErr: "重复的牌"},
+		// 没有名字也没有位置：不知道这副牌是谁的，画像归不到人头上。
+		// 名字那条校验管不着这里（它只在有名字时才要求位置），所以这条专门测新的那道闸
+		{name: "有牌却无从归属", villain: "", cards: "JdTc", position: "", wantErr: "缺少位置"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := validHand()
+			h.Villains = []models.VillainInfo{
+				{Name: tc.villain, Position: tc.position, Cards: tc.cards},
+			}
+			err := ValidateReviewHand(h)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("应通过校验，实际: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("应被拒收（含 %q），实际通过了", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("错误信息应含 %q，实际: %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	// 规范化要真的落回模型上：存进去的必须是 AsKh 这种规范格式，
+	// 否则画像侧按牌面做统计时会拿到一份大小写与空格都不定的数据
+	h := validHand()
+	h.Villains = []models.VillainInfo{
+		{Name: "老王", Position: models.PositionCO, Cards: "jd tc"},
+	}
+	if err := ValidateReviewHand(h); err != nil {
+		t.Fatalf("应通过校验，实际: %v", err)
+	}
+	if h.Villains[0].Cards != "JdTc" {
+		t.Errorf("对手底牌应被规范化为 JdTc，实际 %q", h.Villains[0].Cards)
 	}
 }
 

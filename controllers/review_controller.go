@@ -17,6 +17,7 @@ type ReviewController struct {
 	memorySvc     *services.ReviewMemoryService
 	chatSvc       *services.ReviewChatService
 	opponentSvc   *services.OpponentService
+	profileSvc    *services.OpponentProfileService
 }
 
 func NewReviewController() *ReviewController {
@@ -26,6 +27,7 @@ func NewReviewController() *ReviewController {
 		memorySvc:     services.NewReviewMemoryService(),
 		chatSvc:       services.NewReviewChatService(),
 		opponentSvc:   &services.OpponentService{},
+		profileSvc:    services.NewOpponentProfileService(),
 	}
 }
 
@@ -158,6 +160,128 @@ func (c *ReviewController) SearchOpponents(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.OpponentListResponse{List: list}))
+}
+
+// GetOpponentDetail 对手详情：量化统计 + 与他的对抗手牌（分页）
+func (c *ReviewController) GetOpponentDetail(ctx *gin.Context) {
+	userID := middleware.GetUserID(ctx)
+
+	opponentID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil || opponentID == 0 {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的对手 id"))
+		return
+	}
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("pageSize", "20"))
+
+	opponent, err := c.opponentSvc.GetOpponent(userID, uint(opponentID))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, dto.ErrorResponse(err.Error()))
+		return
+	}
+
+	// 统计要覆盖全部交手手牌，所以单独取一次全量；列表走分页，两者互不影响
+	allHands, err := c.opponentSvc.LoadHandsForStats(userID, opponent.ID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取对手手牌失败: "+err.Error()))
+		return
+	}
+
+	hands, total, err := c.opponentSvc.ListHandsForOpponent(userID, opponent.ID, page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取对抗手牌失败: "+err.Error()))
+		return
+	}
+
+	stats := services.ComputeOpponentStats(opponent.Name, allHands, opponent.ID)
+
+	profile, err := c.profileSvc.GetProfile(userID, opponent.ID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取对手画像失败: "+err.Error()))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.OpponentDetailResponse{
+		Opponent: dto.OpponentResponse{
+			ID:   opponent.ID,
+			Name: opponent.Name,
+			// 与统计用同一个数：列表里的"交手 12 手"和统计表头上的 12 手
+			// 必须是同一个口径，否则用户没法判断哪个是真的。
+			// 与 total 的差别只可能来自 200 手上限（统计只覆盖最近 200 手）
+			HandCount: int64(stats.Hands),
+		},
+		Stats:   stats,
+		Profile: profile,
+		Total:   total,
+		List:    c.reviewService.BuildHandResponses(hands),
+	}))
+}
+
+// GenerateOpponentProfile 触发生成对手画像（异步）。
+//
+// 响应结构与轮询接口一致，前端可以拿它直接进"生成中"状态，不必再多请求一次
+func (c *ReviewController) GenerateOpponentProfile(ctx *gin.Context) {
+	userID := middleware.GetUserID(ctx)
+
+	opponentID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil || opponentID == 0 {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的对手 id"))
+		return
+	}
+
+	profile, _, err := c.profileSvc.StartGeneration(userID, uint(opponentID))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
+		return
+	}
+
+	c.respondOpponentProfile(ctx, userID, uint(opponentID), profile)
+}
+
+// GetOpponentProfile 轮询对手画像状态。
+//
+// 与详情接口分开是因为轮询会打很多次，而详情那次要现算全量统计 ——
+// 让前端每 3 秒重算一遍统计是纯浪费
+func (c *ReviewController) GetOpponentProfile(ctx *gin.Context) {
+	userID := middleware.GetUserID(ctx)
+
+	opponentID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil || opponentID == 0 {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse("无效的对手 id"))
+		return
+	}
+
+	// 先确认这位对手存在且属于当前用户，否则轮询会变成探测别人数据的接口
+	if _, err := c.opponentSvc.GetOpponent(userID, uint(opponentID)); err != nil {
+		ctx.JSON(http.StatusNotFound, dto.ErrorResponse(err.Error()))
+		return
+	}
+
+	profile, err := c.profileSvc.GetProfile(userID, uint(opponentID))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取对手画像失败: "+err.Error()))
+		return
+	}
+
+	c.respondOpponentProfile(ctx, userID, uint(opponentID), profile)
+}
+
+// respondOpponentProfile 组装画像响应。currentHands 让前端能判断"画像比记录旧了"
+func (c *ReviewController) respondOpponentProfile(
+	ctx *gin.Context,
+	userID, opponentID uint,
+	profile *models.OpponentProfile,
+) {
+	hands, err := c.opponentSvc.LoadHandsForStats(userID, opponentID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("获取交手手数失败: "+err.Error()))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.OpponentProfileResponse{
+		Profile:      profile,
+		CurrentHands: len(hands),
+	}))
 }
 
 // GetLeakTags 获取启用的漏洞标签字典

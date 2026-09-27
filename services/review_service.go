@@ -114,6 +114,14 @@ func (s *ReviewService) GetHandList(userID uint, f ReviewHandFilter) (*dto.Revie
 		return nil, err
 	}
 
+	return &dto.ReviewHandListResponse{Total: total, List: s.BuildHandResponses(hands)}, nil
+}
+
+// BuildHandResponses 把一批手牌模型转成响应，顺带补齐关联的场次名。
+//
+// 抽出来是因为手牌列表、对手详情两处都要用：各写一份的话，
+// 迟早有一处忘了补场次名，而那处列表里的场次就永远是空白的
+func (s *ReviewService) BuildHandResponses(hands []models.ReviewHand) []dto.ReviewHandResponse {
 	gameNames := s.loadGameNames(hands)
 
 	list := make([]dto.ReviewHandResponse, 0, len(hands))
@@ -124,8 +132,7 @@ func (s *ReviewService) GetHandList(userID uint, f ReviewHandFilter) (*dto.Revie
 		}
 		list = append(list, dto.ToReviewHandResponse(&hands[i], gameName))
 	}
-
-	return &dto.ReviewHandListResponse{Total: total, List: list}, nil
+	return list
 }
 
 // GetHand 获取手牌详情。

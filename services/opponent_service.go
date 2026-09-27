@@ -17,8 +17,83 @@ const (
 	OpponentSearchMaxLimit     = 50
 )
 
+// OpponentStatsMaxHands 量化统计最多覆盖多少手。
+//
+// 设上限是为了不让一个高频对手把整张表拉进内存。到 200 手这个量级时，
+// 更早的手牌对"他现在怎么打"的参考价值也已经很低了 —— 而且统计口径
+// 越老越可能对应一个已经变了的打法
+const OpponentStatsMaxHands = 200
+
 // OpponentService 对手名单。按 user_id 隔离，与 review_hands 同一套口径
 type OpponentService struct{}
+
+// GetOpponent 取当前用户的某个对手。
+// 带 user_id 过滤：别人的对手对当前用户表现为"不存在"，不泄露存在性
+func (s *OpponentService) GetOpponent(userID, opponentID uint) (*models.Opponent, error) {
+	var opponent models.Opponent
+	err := config.DB.Where("id = ? AND user_id = ?", opponentID, userID).First(&opponent).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("对手不存在")
+		}
+		return nil, err
+	}
+	return &opponent, nil
+}
+
+// ListHandsForOpponent 分页取与某对手交手的手牌，按时间倒序
+func (s *OpponentService) ListHandsForOpponent(userID, opponentID uint, page, pageSize int) ([]models.ReviewHand, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	// 两次都重新构造查询：同一个 *gorm.DB 上先 Count 再 Find 会残留
+	// SELECT count(*) 的语句状态，多花的这点代价换一个不会咬人的写法
+	var total int64
+	if err := s.handsByOpponentQuery(userID, opponentID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	hands := make([]models.ReviewHand, 0, pageSize)
+	err := s.handsByOpponentQuery(userID, opponentID).
+		Order("created_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&hands).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return hands, total, nil
+}
+
+// LoadHandsForStats 取该对手最近 OpponentStatsMaxHands 手牌，供量化统计使用。
+//
+// 统计要覆盖**全部**交手手牌，不能只统计列表当前页 —— 否则翻一页数字就变一次
+func (s *OpponentService) LoadHandsForStats(userID, opponentID uint) ([]models.ReviewHand, error) {
+	hands := make([]models.ReviewHand, 0, 64)
+	err := s.handsByOpponentQuery(userID, opponentID).
+		Order("created_at DESC").
+		Limit(OpponentStatsMaxHands).
+		Find(&hands).Error
+	if err != nil {
+		return nil, err
+	}
+	return hands, nil
+}
+
+// handsByOpponentQuery 与某对手交手的手牌查询。
+//
+// 手牌与对手的关联藏在 villains 这个 JSON 列里的 opponentId，用 JSON_CONTAINS 现查。
+// 不另建关联表：对手只是手牌的一部分，拆表会让"整手读写"的手牌多一次 join，
+// 而这点数据量根本不需要那种优化
+func (s *OpponentService) handsByOpponentQuery(userID, opponentID uint) *gorm.DB {
+	return config.DB.Model(&models.ReviewHand{}).
+		Where("user_id = ? AND villains IS NOT NULL", userID).
+		Where("JSON_CONTAINS(villains, JSON_OBJECT('opponentId', ?))", opponentID)
+}
 
 // SearchOpponents 按名字模糊搜当前用户的对手，附带"已交手 N 手"。
 //

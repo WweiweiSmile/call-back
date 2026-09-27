@@ -80,6 +80,32 @@ type OpponentListResponse struct {
 	List []OpponentResponse `json:"list"`
 }
 
+// OpponentDetailResponse 对手详情：对手本身 + 量化统计 + 分页的对抗手牌。
+//
+// stats 覆盖**全部**交手手牌（上限 services.OpponentStatsMaxHands），与 list 的分页无关。
+// 统计口径不能跟着页码走 —— 否则用户翻一页，"入池率 60%"就变成了"入池率 40%"，
+// 而他没有任何办法知道哪个才是对的
+type OpponentDetailResponse struct {
+	Opponent OpponentResponse      `json:"opponent"`
+	Stats    *models.OpponentStats `json:"stats"`
+	// Profile 已有的画像。nil = 还没生成过（页面显示"生成画像"的引导），
+	// 与"生成过但内容是空的"要能分开
+	Profile *models.OpponentProfile `json:"profile,omitempty"`
+	Total   int64                   `json:"total"`
+	List    []ReviewHandResponse    `json:"list"`
+}
+
+// OpponentProfileResponse 画像接口的响应。
+//
+// 单独包一层而不是直接返回模型：要带上 handsOutdated 这个派生字段，
+// 而它是"当前手数 vs 生成时手数"比出来的，不属于画像本身
+type OpponentProfileResponse struct {
+	Profile *models.OpponentProfile `json:"profile,omitempty"`
+	// CurrentHands 当前可归属的交手手数。
+	// 比 profile.handsAtGeneration 大就说明画像比记录旧了
+	CurrentHands int `json:"currentHands"`
+}
+
 // ReviewLeakTagResponse 漏洞标签响应
 type ReviewLeakTagResponse struct {
 	Code        string `json:"code"`

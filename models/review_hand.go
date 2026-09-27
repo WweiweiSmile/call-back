@@ -105,6 +105,20 @@ type VillainInfo struct {
 	OpponentID uint `json:"opponentId,omitempty"`
 	// Name 对手的称呼，进提示词。为空表示 M7.1 之前的老数据（或只记了位置没记名字）
 	Name string `json:"name,omitempty"`
+
+	// Cards 对手的底牌，规范格式如 AsKh。选填 —— 只有摊牌或对手主动亮牌时才知道，
+	// 大多数手牌留空（没看到就留空，不要猜）。
+	//
+	// **它绝不进手牌分析的提示词**：BuildHandBlock 不渲染这个字段，而且
+	// ComputeHandHash 把它排除在指纹之外（指纹的语义是"AI 看到的内容"）。
+	// 教练看不到对手底牌，学员才被迫去读牌，而不是拿答案反推自己的决策；
+	// 一旦泄漏，整个复盘就退化成"事后诸葛亮"。
+	//
+	// 它的唯一用途是**对手画像**（services/opponent_profile_*）：让画像能回答
+	// "他下注的时候到底是不是真有牌"——这是纯行为统计给不出的那份证据。
+	//
+	// 必须带 omitempty：老手牌序列化后要一字不变
+	Cards string `json:"cards,omitempty"`
 }
 
 // villainPositions 本手牌记录过的对手位置集合

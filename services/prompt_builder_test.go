@@ -330,3 +330,49 @@ func TestFormatAnalysisForChatIncludesV2Blocks(t *testing.T) {
 		}
 	}
 }
+
+// 对手底牌绝不能出现在任何一条提示词路径里。
+//
+// 这条约束靠"BuildHandBlock 里少写一行 Fprintf"是守不住的 —— 筹码、位置、
+// 名字都是这么一行行加进去的，Cards 很容易被顺手带上。所以这里拿真实提示词的
+// 全文做断言，而且**两条路径都查**：分析与追问都渲染手牌块，只堵一条等于没堵。
+//
+// 断言同时覆盖两种写法：原始串 "7d2c" 与经 formatCards 转出的 "7♦2♣"。
+// 只查其中一种的话，换个渲染方式就能绕过去。
+func TestPromptsNeverLeakVillainCards(t *testing.T) {
+	const villainCards = "7d2c"
+	forbidden := []string{villainCards, "7♦2♣", "7♦", "2♣"}
+
+	hand := handWithTableSize(9)
+	// 公牌与双方的底牌都不能撞车，否则下面"某个符号是别的牌"会让断言失去意义
+	hand.Board = "QsJh4s3d9c"
+	hand.HeroThought = "他可能是听牌"
+	hand.Villains = []models.VillainInfo{
+		{Name: "老王", Position: models.PositionCO, IsKey: true, Cards: villainCards},
+	}
+
+	analysisSystem, analysisUser := BuildAnalysisPrompt(hand, nil, nil)
+	chatSystem, chatUser := BuildChatPrompt(hand, nil, nil, nil)
+
+	paths := map[string]string{
+		"分析-system": analysisSystem,
+		"分析-user":   analysisUser,
+		"追问-system": chatSystem,
+		"追问-user":   chatUser,
+	}
+	for name, text := range paths {
+		if text == "" {
+			t.Fatalf("%s 是空的，这个测试就没在验任何东西了", name)
+		}
+		for _, bad := range forbidden {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s 提示词泄漏了对手底牌 %q:\n%s", name, bad, text)
+			}
+		}
+	}
+
+	// 反向确认：这位对手确实进了提示词，上面查的不是一个空壳
+	if !strings.Contains(analysisUser, "老王") {
+		t.Error("对手名应出现在提示词里，否则上面的检查等于没查")
+	}
+}

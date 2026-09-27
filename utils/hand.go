@@ -269,6 +269,31 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 		if v.Name != "" && v.Position == "" {
 			return fmt.Errorf("对手「%s」没有位置", v.Name)
 		}
+
+		// 对手底牌：格式与 hero 底牌同一套口径。记了牌就必须坐在一个位置上 ——
+		// 位置是手内唯一的身份锚点，没有它就不知道这副牌是谁的，画像也无从归属
+		v.Cards = NormalizeCards(v.Cards)
+		if v.Cards != "" {
+			if v.Position == "" {
+				return fmt.Errorf("对手底牌缺少位置：无法确认这手牌属于哪位对手")
+			}
+			if len(v.Cards) != 4 {
+				return fmt.Errorf("对手底牌必须是 2 张，当前为 %d 张", len(v.Cards)/2)
+			}
+			if err := ValidateCards(v.Cards); err != nil {
+				return fmt.Errorf("对手底牌不合法：%w", err)
+			}
+			// 与 hero 底牌、公共牌共用同一个 seen：一副牌里同一张牌不可能出现两次，
+			// 对手底牌与公牌撞车说明录入有误，而这份数据会拿去建画像，错不起
+			for j := 0; j < len(v.Cards); j += 2 {
+				card := v.Cards[j : j+2]
+				if seen[card] {
+					return fmt.Errorf("重复的牌：%s", card)
+				}
+				seen[card] = true
+			}
+		}
+
 		if v.Position == "" {
 			continue
 		}
@@ -418,6 +443,24 @@ func streetNameForCount(cards int) string {
 	}
 }
 
+// hashVillains 返回一份"能进提示词的对手信息"，把 Cards 清空。
+//
+// 走浅拷贝而不是另立一个结构体：另立一份就要在 VillainInfo 每加一个进提示词的
+// 字段时记得同步，漏了是静默失效（改了对手信息却不算内容变更）。这里反过来 ——
+// 默认全部计入，**只有明确要排除的字段才在这里清掉**，漏掉的后果是多算一次，
+// 不会少算。要排除新字段时，这个函数就是唯一要改的地方。
+func hashVillains(villains []models.VillainInfo) []models.VillainInfo {
+	if len(villains) == 0 {
+		return villains
+	}
+	out := make([]models.VillainInfo, len(villains))
+	copy(out, villains)
+	for i := range out {
+		out[i].Cards = ""
+	}
+	return out
+}
+
 // ComputeHandHash 计算手牌内容指纹。
 //
 // 只放**真正会进提示词**的字段。刻意排除的每一项都有理由：
@@ -426,6 +469,9 @@ func streetNameForCount(cards int) string {
 //   - HeroTags：标签只是用户自己的翻查线索，不进提示词，模型看不到它。
 //     把它算进指纹的后果是"给手牌加个标签"就重置分析状态、清掉画像洞察，
 //     还得白花一次额度重新分析
+//   - VillainInfo.Cards：对手底牌不进手牌分析的提示词（见 VillainInfo.Cards 注释），
+//     所以不能进指纹。它若进了指纹，用户补录一次"摊牌时看到的对手底牌"就会让
+//     已有分析失效、白花一次额度，而重算结果与原来一模一样 —— 纯亏损
 //
 // 反过来，HeroThought、Streets 这些会直接影响结论的字段一个都不能漏。
 func ComputeHandHash(h *models.ReviewHand) string {
@@ -457,7 +503,7 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		AnteBB:       h.AnteBB,
 		Board:        h.Board,
 		VillainCount: h.VillainCount,
-		Villains:     h.Villains,
+		Villains:     hashVillains(h.Villains),
 		PotType:      h.PotType,
 		Streets:      h.Streets,
 		HeroThought:  h.HeroThought,

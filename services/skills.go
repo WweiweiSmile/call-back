@@ -633,6 +633,23 @@ func handID(hand *models.ReviewHand) uint {
 	return hand.ID
 }
 
+// OpponentProfileSkills 对手画像要展开的技能：两篇常驻 + 对手读牌。
+//
+// 画像与手牌分析**必须共用同一套方法论**。否则会出现"手牌分析按小绿皮书说他松凶、
+// 画像按另一套口径说他松弱"的自相矛盾，而用户完全无从判断哪个是对的 ——
+// 这跟 BuildChatSystemPrompt 注释里那条"追问不能推翻首次分析"是同一个道理。
+//
+// 走 SelectSkills 的路由而不是硬编码一篇：常驻技能将来增减时这里自动跟着变
+func OpponentProfileSkills() []Skill {
+	selected := make([]Skill, 0, 3)
+	for _, s := range AllSkills() {
+		if s.Trigger.Always || s.Code == "opponent-read" {
+			selected = append(selected, s)
+		}
+	}
+	return selected
+}
+
 // RenderSkillCatalog 拼装技能目录（渐进性披露的第一层，永远注入）。
 //
 // 目录不是纯索引：每篇带一句话结论，所以「未展开」的代价是「细节不够」而不是

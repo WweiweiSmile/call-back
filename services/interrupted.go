@@ -47,4 +47,18 @@ func ReapInterruptedTasks() {
 	} else if res.RowsAffected > 0 {
 		log.Printf("[回收] 清理了 %d 条中断的总结重写", res.RowsAffected)
 	}
+
+	// 对手画像同理：不回收的话页面会永远停在"生成中"，
+	// 而用户既拿不到结果也没法重新触发（在飞闸会把新的请求也挡掉）
+	if res := config.DB.Model(&models.OpponentProfile{}).
+		Where("status IN ?",
+			[]string{models.SummaryStatusPending, models.SummaryStatusRunning}).
+		Updates(map[string]interface{}{
+			"status":    models.SummaryStatusFailed,
+			"error_msg": profileInterruptedMsg,
+		}); res.Error != nil {
+		log.Printf("[回收] 画像任务失败: %v", res.Error)
+	} else if res.RowsAffected > 0 {
+		log.Printf("[回收] 清理了 %d 条中断的画像生成", res.RowsAffected)
+	}
 }

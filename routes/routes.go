@@ -107,7 +107,13 @@ func SetupRoutes(r *gin.Engine) {
 				reviews.GET("/hands/:id/analyses", reviewController.GetHandAnalyses) // 该手牌的历史分析
 				reviews.GET("/analyses/:id", reviewController.GetAnalysis)           // 轮询分析状态与结果
 
-				reviews.GET("/opponents", reviewController.SearchOpponents) // 我的对手名单（添加对手弹窗用）
+				reviews.GET("/opponents", reviewController.SearchOpponents)       // 我的对手名单（添加对手弹窗用）
+				reviews.GET("/opponents/:id", reviewController.GetOpponentDetail) // 对手详情：统计 + 对抗手牌 + 画像
+
+				// 对手画像（用户主动触发，异步）。轮询单独一个轻量接口 ——
+				// 详情那次要现算全量统计，每 3 秒重算一遍是纯浪费
+				reviews.POST("/opponents/:id/profile", reviewController.GenerateOpponentProfile)
+				reviews.GET("/opponents/:id/profile", reviewController.GetOpponentProfile)
 
 				// 静态路径放在 /hands/:id 之类的通配路径之后不影响匹配，
 				// 因为它们的第一段就不同（leak-tags / ai-status vs hands）

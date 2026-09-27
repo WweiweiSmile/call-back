@@ -263,6 +263,10 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		if v.IsKey {
 			key = "  [关键对手]"
 		}
+		// ⚠️ 这里**刻意不渲染 v.Cards（对手底牌）**。对手底牌只服务对手画像，
+		// 一旦进了复盘提示词，教练就会直接说出"他其实是 AA"，学员的读牌练习就没了。
+		// 这条约束由 prompt_builder_test.go 的 TestAnalysisPromptNeverLeaksVillainCards
+		// 守着 —— 往上面这行 Fprintf 里加字段时，那个测试会先红
 		fmt.Fprintf(&sb, "%s (%s)%s%s\n", name, position, stack, key)
 		listed++
 	}

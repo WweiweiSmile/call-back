@@ -67,16 +67,26 @@ func (s *ReviewAnalysisService) GetAIStatus(userID uint) *AIStatus {
 	return status
 }
 
-// countTodayUsage 统计用户今天发起过的分析次数
+// countTodayUsage 统计用户今天用掉的模型调用次数。
+//
+// **对手画像的生成也算在内**：额度管的是"每天最多调用多少次模型"，
+// 不是"多少次手牌分析"。只算分析的话，用户反复点"生成对手画像"就能绕开这个限制，
+// 而每次都在真实地烧钱
+//
+// 画像按 updated_at 判：一张画像只有一行，每次任务都会把它顶到今天。
+// 用 last_generated_at 会漏掉失败的那几次 —— 失败也调用了模型，也该计数
 func (s *ReviewAnalysisService) countTodayUsage(userID uint) int {
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
-	var count int64
+	var analyses, profiles int64
 	config.DB.Model(&models.ReviewAnalysis{}).
 		Where("user_id = ? AND created_at >= ?", userID, startOfDay).
-		Count(&count)
-	return int(count)
+		Count(&analyses)
+	config.DB.Model(&models.OpponentProfile{}).
+		Where("user_id = ? AND updated_at >= ?", userID, startOfDay).
+		Count(&profiles)
+	return int(analyses + profiles)
 }
 
 // RequestAnalysis 触发一次分析。
