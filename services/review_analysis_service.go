@@ -153,11 +153,12 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 	}
 
 	analysis := &models.ReviewAnalysis{
-		HandID:        handID,
-		UserID:        userID,
-		Status:        models.AnalysisStatusPending,
-		Model:         settings.Model,
-		PromptVersion: models.CurrentPromptVersion,
+		HandID: handID,
+		UserID: userID,
+		Status: models.AnalysisStatusPending,
+		Model:  settings.Model,
+		// 按这手牌报版本：爆炸底池的手牌块与常规手牌不同（见 models.PromptVersionFor）
+		PromptVersion: models.PromptVersionFor(hand),
 		ContentHash:   hand.ContentHash,
 	}
 

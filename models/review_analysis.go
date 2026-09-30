@@ -23,7 +23,36 @@ const (
 // 追问对话共用同一套口径；输出 Schema 增加 opponentRead 与 actionAdvice 两个
 // 字段。这是**不向后兼容**的一次变更：v2.0 之前的分析结果里这两个字段为空，
 // 前端必须容忍缺失（按可选字段处理），跨版本的结论也不再直接可比。
+//
+// v3.0-skills：系统提示词改为按触发器**按需注入技能正文**（services/skills/），
+// 常驻的是 core-stance 与 odds-table 两篇。翻前/翻后技能只在牌局真的出现
+// 对应形态时才给，省 token 也减少互相干扰
+//
+// v3.1-skills（爆炸底池）：手牌块在爆炸底池那手牌上多一行说明（没有翻前行动、
+// 每人先投多少），最终底池的口径文案也多一种。**非爆炸底池的手牌输出与 v3.0
+// 逐字一致**，所以跨版本结论仍然可比 —— 变的只是这一种新玩法的渲染。
+// 注意它不是全局当前版本，见下面的 PromptVersionFor
 const CurrentPromptVersion = "v3.0-skills"
+
+// PromptVersionBombPot 爆炸底池手牌用的提示词版本
+const PromptVersionBombPot = "v3.1-skills"
+
+// PromptVersionFor 这手牌实际产出的提示词是哪一版。
+//
+// 版本号的作用是"日后回溯这条结论是哪版提示词产出的"，所以它必须按**手牌**报：
+// 爆炸底池的手牌块多一行说明，非爆炸底池的逐字没变。写成全局常量一并升版的后果是
+// 库里所有历史分析都会因为"版本不一致"被判 stale，前端随即跳出
+// 「这手牌在分析之后被修改过」—— 对那些根本没改过的手牌是假警报，
+// 而要压掉这个警报，用户会被诱导白花一次模型额度重跑一遍逐字相同的提示词。
+//
+// 顺带的好处：把爆炸底池开关拨掉，这手牌的版本跟着变，旧结论会被正确地判成
+// "依据变了"（这一条同时也由内容指纹覆盖，见 ComputeHandHash）
+func PromptVersionFor(hand *ReviewHand) string {
+	if hand != nil && hand.BombPotBB > 0 {
+		return PromptVersionBombPot
+	}
+	return CurrentPromptVersion
+}
 
 // 结构化分析结果。
 //

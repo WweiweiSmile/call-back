@@ -311,6 +311,7 @@ func applyHandRequest(hand *models.ReviewHand, req *dto.ReviewHandRequest) {
 	hand.SmallBlindBB = req.SmallBlindBB
 	hand.BigBlindBB = req.BigBlindBB
 	hand.AnteBB = req.AnteBB
+	hand.BombPotBB = req.BombPotBB
 	hand.Board = req.Board
 	hand.VillainCount = req.VillainCount
 	hand.Villains = req.Villains

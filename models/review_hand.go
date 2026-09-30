@@ -196,6 +196,13 @@ type ReviewHand struct {
 	BigBlindBB   float64 `json:"bigBlindBb" gorm:"default:0;comment:大盲(BB)"`
 	AnteBB       float64 `json:"anteBb" gorm:"default:0;comment:前注(BB)，每人一份"`
 
+	// BombPotBB 爆炸底池每人先投的额度（BB）。0 = 不是爆炸底池。
+	// 爆炸底池没有翻前行动，所有人先投这么多直接看翻牌，起始底池 = 它 × 人数。
+	// 存额度而不是存一个"是不是爆炸底池"的布尔：玩法从 5bb 改成 10bb 时，
+	// 历史手牌不会被重新解释（与上面三个盲注列按手存同一个理由）。
+	// 与三个盲注列互斥：> 0 时它们必须为 0，见 utils.ValidateBombPot
+	BombPotBB float64 `json:"bombPotBb" gorm:"default:0;comment:爆炸底池每人先投(BB)，0=不是爆炸底池"`
+
 	Board        string `json:"board" gorm:"size:10;comment:公共牌，按发牌顺序拼接如 Qs7h2d3c9s"`
 	VillainCount int    `json:"villainCount" gorm:"comment:对手数量"`
 
@@ -237,6 +244,7 @@ func (h *ReviewHand) Blinds() BlindConfig {
 		SmallBlindBB: h.SmallBlindBB,
 		BigBlindBB:   h.BigBlindBB,
 		AnteBB:       h.AnteBB,
+		BombPotBB:    h.BombPotBB,
 		TableSize:    h.TableSize,
 		HeroPosition: h.HeroPosition,
 	}

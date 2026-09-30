@@ -368,9 +368,11 @@ func (c *ReviewController) GetHandAnalyses(ctx *gin.Context) {
 		// 两种「这条结论不再对应当前情况」：
 		//  1. 指纹不一致 —— 这手牌的内容改过了
 		//  2. 提示词版本不一致 —— 技能库改过版，依据本身变了。
-		//     只提示、不自动重跑：一手牌几分钟、要花钱，重不重跑由用户决定
+		//     只提示、不自动重跑：一手牌几分钟、要花钱，重不重跑由用户决定。
+		//     比的是**这手牌今天会产出的版本**（见 PromptVersionFor），不是全局常量 ——
+		//     用常量的话，只影响某一类玩法的改动会把全库历史分析一起标成过期
 		resp.Stale = (list[i].ContentHash != "" && list[i].ContentHash != hand.ContentHash) ||
-			(list[i].PromptVersion != "" && list[i].PromptVersion != models.CurrentPromptVersion)
+			(list[i].PromptVersion != "" && list[i].PromptVersion != models.PromptVersionFor(hand))
 		items = append(items, resp)
 	}
 

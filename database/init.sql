@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS review_hands (
     small_blind_bb DOUBLE DEFAULT 0 COMMENT '小盲(BB)，0 表示未记录',
     big_blind_bb DOUBLE DEFAULT 0 COMMENT '大盲(BB)，0 表示未记录',
     ante_bb DOUBLE DEFAULT 0 COMMENT '前注(BB)，每人一份',
+    bomb_pot_bb DOUBLE DEFAULT 0 COMMENT '爆炸底池每人先投(BB)，0=不是爆炸底池。与盲注三项互斥',
     board VARCHAR(10) COMMENT '公共牌，按发牌顺序拼接如 Qs7h2d3c9s',
     villain_count INT DEFAULT 0 COMMENT '对手数量',
     villains JSON COMMENT '对手信息 [{position, stackBb, isKey}]',

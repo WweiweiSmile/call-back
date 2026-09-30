@@ -292,6 +292,15 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		sb.WriteString("（翻前底池已含这部分死钱，行动序列里不再重复记录）\n")
 	}
 
+	// 爆炸底池必须单独说明。它的 BlindConfig 三项是 0（确实没发盲注），
+	// 但**不能因此让模型以为"用户漏记了翻前"** —— 这手牌压根没有翻前，
+	// 死钱是每人先投的那一笔。少了这句，模型会按常规牌局的框架去批评
+	// "翻前为什么没有任何动作"
+	if blinds.IsBombPot() {
+		fmt.Fprintf(&sb, "爆炸底池: 没有翻前行动，%d 人每人先投 %sbb 直接看翻牌（翻前底池 = 每人 %sbb × %d 人 = %sbb，不含盲注与前注）\n",
+			blinds.TableSize, formatBB(blinds.BombPotBB), formatBB(blinds.BombPotBB), blinds.TableSize, formatBB(blinds.PreflopPotBB()))
+	}
+
 	pots := utils.ComputeStreetPots(hand.Streets, blinds)
 	boardCards := parseCards(hand.Board)
 
@@ -350,6 +359,10 @@ func BuildHandBlock(hand *models.ReviewHand) string {
 		note := "（估算，未记录盲注与前注）"
 		if !blinds.IsZero() {
 			note = "（估算，已含盲注与前注）"
+		}
+		// 爆炸底池第三种口径：它的死钱既不是"未记录"也不是盲注与前注
+		if blinds.IsBombPot() {
+			note = "（估算，已含爆炸底池每人先投的死钱）"
 		}
 		fmt.Fprintf(&sb, "最终底池约 %.1fbb%s\n", step.PotEndBB, note)
 	}

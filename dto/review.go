@@ -18,9 +18,12 @@ type ReviewHandRequest struct {
 	HeroStackBB  float64 `json:"heroStackBb"`
 	Stakes       string  `json:"stakes"`
 	// 盲注与前注（BB）。三项都是 0 表示没记录，底池按不含盲注的老口径估算
-	SmallBlindBB float64               `json:"smallBlindBb"`
-	BigBlindBB   float64               `json:"bigBlindBb"`
-	AnteBB       float64               `json:"anteBb"`
+	SmallBlindBB float64 `json:"smallBlindBb"`
+	BigBlindBB   float64 `json:"bigBlindBb"`
+	AnteBB       float64 `json:"anteBb"`
+	// BombPotBB 爆炸底池每人先投的额度（BB）。0 = 不是爆炸底池。
+	// 与上面三个盲注字段互斥，见 utils.ValidateBombPot
+	BombPotBB    float64               `json:"bombPotBb"`
 	Board        string                `json:"board"`
 	VillainCount int                   `json:"villainCount"`
 	Villains     []models.VillainInfo  `json:"villains"`
@@ -46,6 +49,7 @@ type ReviewHandResponse struct {
 	SmallBlindBB  float64               `json:"smallBlindBb"`
 	BigBlindBB    float64               `json:"bigBlindBb"`
 	AnteBB        float64               `json:"anteBb"`
+	BombPotBB     float64               `json:"bombPotBb"`
 	Board         string                `json:"board"`
 	VillainCount  int                   `json:"villainCount"`
 	Villains      []models.VillainInfo  `json:"villains"`
@@ -150,6 +154,7 @@ func ToReviewHandResponse(hand *models.ReviewHand, gameName string) ReviewHandRe
 		SmallBlindBB:  hand.SmallBlindBB,
 		BigBlindBB:    hand.BigBlindBB,
 		AnteBB:        hand.AnteBB,
+		BombPotBB:     hand.BombPotBB,
 		Board:         hand.Board,
 		VillainCount:  hand.VillainCount,
 		Villains:      villains,

@@ -189,6 +189,25 @@ func ValidateBlinds(smallBlind, bigBlind, ante float64) error {
 	return nil
 }
 
+// ValidateBombPot 校验爆炸底池每人先投的额度（BB）。
+//
+// 0 表示不是爆炸底池，是合法状态（绝大多数手牌都是）。
+//
+// > 0 时与盲注互斥：爆炸底池不发盲注与前注，两者同时有值是自相矛盾的数据 ——
+// 起始底池会按两套口径各算一遍，模型也会看到一份不存在的牌局。拦在入口更省事
+func ValidateBombPot(bombPotBB, smallBlind, bigBlind, ante float64) error {
+	if bombPotBB < 0 {
+		return fmt.Errorf("爆炸底池每人先投的额度不能为负数")
+	}
+	if bombPotBB == 0 {
+		return nil
+	}
+	if smallBlind > 0 || bigBlind > 0 || ante > 0 {
+		return fmt.Errorf("爆炸底池不发盲注与前注，两者不能同时填写")
+	}
+	return nil
+}
+
 // ValidateReviewHand 校验并就地规范化手牌。
 // 校验不通过时返回中文错误，可直接透给前端展示。
 func ValidateReviewHand(h *models.ReviewHand) error {
@@ -359,6 +378,11 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 		return err
 	}
 
+	// 爆炸底池与盲注互斥，两条规则要放在一起读，所以紧跟其后
+	if err := ValidateBombPot(h.BombPotBB, h.SmallBlindBB, h.BigBlindBB, h.AnteBB); err != nil {
+		return err
+	}
+
 	// --- 行动序列 ---
 	// 记录出现了哪些街，用于下面校验公共牌张数是否匹配
 	maxBoardNeeded := 0
@@ -369,6 +393,11 @@ func ValidateReviewHand(h *models.ReviewHand) error {
 		need, ok := streetMinBoardCards[street.Street]
 		if !ok {
 			return fmt.Errorf("无效的街道：%s", street.Street)
+		}
+		// 爆炸底池没有翻前行动。前端勾上开关时会清空翻前，这里拦的是绕过前端的提交：
+		// 一份"爆炸底池 + 翻前有人加注"的数据，底池与 AI 点评都会错得没法解释
+		if h.BombPotBB > 0 && street.Street == models.StreetPreflop && len(street.Actions) > 0 {
+			return fmt.Errorf("爆炸底池没有翻前行动，请清空翻前记录")
 		}
 		if len(street.Actions) > 0 && need > maxBoardNeeded {
 			maxBoardNeeded = need
@@ -474,6 +503,12 @@ func hashVillains(villains []models.VillainInfo) []models.VillainInfo {
 //     已有分析失效、白花一次额度，而重算结果与原来一模一样 —— 纯亏损
 //
 // 反过来，HeroThought、Streets 这些会直接影响结论的字段一个都不能漏。
+//
+// 爆炸底池的 BombPotBB **必须带 omitempty**：它在绝大多数手牌上是 0，不带的话
+// 每一条老手牌的序列化都会多出一个字段、指纹全变，用户一打开旧牌再保存就被判成
+// "内容变了"，白花一次额度重分析。这与 VillainInfo 上那两个 omitempty 是同一招。
+// 真正是爆炸底池的手牌（值 > 0）会出现在指纹里，改标记照样让旧分析失效 —— 应该的，
+// 翻前从"有"变成"没有"，结论完全不同
 func ComputeHandHash(h *models.ReviewHand) string {
 	payload := struct {
 		TableSize    int                   `json:"tableSize"`
@@ -484,6 +519,7 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		SmallBlindBB float64               `json:"smallBlindBb"`
 		BigBlindBB   float64               `json:"bigBlindBb"`
 		AnteBB       float64               `json:"anteBb"`
+		BombPotBB    float64               `json:"bombPotBb,omitempty"`
 		Board        string                `json:"board"`
 		VillainCount int                   `json:"villainCount"`
 		Villains     []models.VillainInfo  `json:"villains"`
@@ -501,6 +537,7 @@ func ComputeHandHash(h *models.ReviewHand) string {
 		SmallBlindBB: h.SmallBlindBB,
 		BigBlindBB:   h.BigBlindBB,
 		AnteBB:       h.AnteBB,
+		BombPotBB:    h.BombPotBB,
 		Board:        h.Board,
 		VillainCount: h.VillainCount,
 		Villains:     hashVillains(h.Villains),

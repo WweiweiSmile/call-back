@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 赔率快速训练功能" />
+    <list default="true" id="efe228f8-cdde-47c6-8a2d-f6c2b7e59a3b" name="更改" comment="refactor: 添加对手管理">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -138,6 +140,7 @@
     <MESSAGE value="refactor: env 文件加载优化" />
     <MESSAGE value="refactor: 添加赔率计算表" />
     <MESSAGE value="refactor: 赔率快速训练功能" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: 赔率快速训练功能" />
+    <MESSAGE value="refactor: 添加对手管理" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: 添加对手管理" />
   </component>
 </project>
