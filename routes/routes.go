@@ -9,7 +9,6 @@ import (
 
 func SetupRoutes(r *gin.Engine) {
 	// 初始化控制器
-	authController := controllers.NewAuthController()
 	gameController := controllers.NewGameController()
 	transactionController := controllers.NewTransactionController()
 	scoreRequestController := controllers.NewScoreRequestController()
@@ -21,20 +20,16 @@ func SetupRoutes(r *gin.Engine) {
 	// API 路由组
 	api := r.Group("/api/v1")
 	{
-		// 认证相关（不需要登录）
-		auth := api.Group("/auth")
-		{
-			auth.POST("/register", authController.Register) // 注册
-			auth.POST("/login", authController.Login)       // 登录
-		}
+		// 认证相关（注册、登录、刷新、登出、取用户信息）已经**整体迁到
+		// 认证中心 call-auth**，本服务不再提供 —— 它只验签，不签发。
+		// 前端要登录请打 call-auth（默认 :8020）的 /api/v1/auth/*
+		//
+		// 设计说明见《认证中心设计文档》§3.2
 
 		// 需要认证的路由
 		authorized := api.Group("")
 		authorized.Use(middleware.AuthMiddleware())
 		{
-			// 用户信息
-			authorized.GET("/auth/user", authController.GetUserInfo)
-
 			// 用户默认设置：复盘录入用的盲注默认值 + BYOK 模型配置，
 			// 放在顶层而不是 /reviews 下面：它是账号级偏好，不属于某手牌或某次分析
 			preferences := authorized.Group("/preferences")

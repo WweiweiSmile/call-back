@@ -18,7 +18,19 @@ type Config struct {
 	DBPassword string
 	DBName     string
 	ServerPort string
-	JWTSecret  string
+
+	// ---------- 认证 ----------
+	// 本服务**只验签、不签发**：签发权归认证中心 call-auth。所以这里不再需要
+	// 任何密钥 —— 只有公钥地址。好处是新增服务不用分发密钥，任何一个服务被攻破
+	// 也伪造不了 token（《认证中心设计文档》§3.2）
+	//
+	// 原先这里有个 JWTSecret，默认值硬编码成 "call-game-secret-key-2026"：
+	// 只要漏配，服务就会拿着一个人尽皆知的密钥正常启动，任何人都能伪造任意用户。
+	// 改成 RS256 之后它没有存在必要了，直接删掉
+	AuthJWKSURL   string
+	AuthIssuer    string
+	AuthAudience  string
+	AuthJWKSCache string
 
 	// PrefEncryptionKey 用户 API Key 的 AES-256-GCM 主密钥。
 	// 生成：openssl rand -base64 32。为空或长度不对时「模型设置」只能读不能写，
@@ -67,7 +79,12 @@ func LoadConfig() error {
 		DBPassword: GetEnv("DB_PASSWORD", ""),
 		DBName:     GetEnv("DB_NAME", "call_game"),
 		ServerPort: GetEnv("SERVER_PORT", "8080"),
-		JWTSecret:  GetEnv("JWT_SECRET", "call-game-secret-key-2026"),
+		// 默认指向本机的认证中心。这不是密钥，给默认值没有安全风险 ——
+		// 而且验签本身会失败得很明显（拉不到公钥就启动不了），不会静默降级
+		AuthJWKSURL:   GetEnv("AUTH_JWKS_URL", "http://localhost:8020/.well-known/jwks.json"),
+		AuthIssuer:    GetEnv("AUTH_ISSUER", "call-auth"),
+		AuthAudience:  GetEnv("AUTH_AUDIENCE", "call-back"),
+		AuthJWKSCache: GetEnv("AUTH_JWKS_CACHE", "./runtime/jwks.json"),
 
 		PrefEncryptionKey: GetEnv("PREF_ENCRYPTION_KEY", ""),
 

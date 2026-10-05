@@ -35,7 +35,6 @@ func verifySetup(t *testing.T) (*AICallSettings, *AIClient, []models.ReviewLeakT
 	if err := config.LoadConfig(); err != nil {
 		t.Fatal(err)
 	}
-	utils.SetJWTSecret(config.AppConfig.JWTSecret)
 	utils.SetPreferenceEncryptionKey(config.AppConfig.PrefEncryptionKey)
 	if err := config.InitDB(); err != nil {
 		t.Fatal(err)

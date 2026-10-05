@@ -22,8 +22,16 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	// 设置JWT密钥
-	utils.SetJWTSecret(config.AppConfig.JWTSecret)
+	// 加载认证中心的公钥。本服务不再自己签发 token ——
+	// 登录/注册已经迁到 call-auth，这里只负责验签
+	if err := utils.SetupJWKS(
+		config.AppConfig.AuthJWKSURL,
+		config.AppConfig.AuthIssuer,
+		config.AppConfig.AuthAudience,
+		config.AppConfig.AuthJWKSCache,
+	); err != nil {
+		log.Fatal("初始化令牌验签失败: ", err)
+	}
 
 	// 设置用户 API Key 的加密主密钥。缺失时不致命：服务照常启动，
 	// 只是「模型设置」只能读不能写
