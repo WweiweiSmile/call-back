@@ -24,6 +24,10 @@ func ReapInterruptedTasks() {
 		return
 	}
 
+	// 退点必须排在下面那批状态更新**之前** —— 更新会把 pending/running 改成
+	// failed，之后就再也找不出"哪些任务是被中断的"了
+	reapOrphanRefunds()
+
 	if res := config.DB.Model(&models.ReviewMessage{}).
 		Where("role = ? AND status IN ?", models.MessageRoleAssistant,
 			[]string{models.MessageStatusPending, models.MessageStatusRunning}).
@@ -60,5 +64,54 @@ func ReapInterruptedTasks() {
 		log.Printf("[回收] 画像任务失败: %v", res.Error)
 	} else if res.RowsAffected > 0 {
 		log.Printf("[回收] 清理了 %d 条中断的画像生成", res.RowsAffected)
+	}
+}
+
+// reapOrphanRefunds 给被判定为"中断"的任务退点。
+//
+// 用户没拿到结果就不该扣（2026-10 的口径）。放在启动时回收是**精确**判据 ——
+// 刚开机不可能有本进程的任务在跑。多实例共享一个库时，可能误伤另一个实例正在跑的
+// 任务，从而多退几点（每条约 1~3 点）：量级可接受，比让用户白扣划算
+//
+// ⚠️ 刻意**不退画像总结**（review_profiles）：那张表区分不出这次重写是手动触发的
+// （扣了 3 点）还是分析后自动触发的（不扣，含在复盘那 3 点里）。无差别退会给
+// 自动那条白送点数。要修得先在那张表上记一个"这次扣没扣"的标记
+//
+// 只统计、不改状态：调用方紧接着就会把那批行标成 failed
+func reapOrphanRefunds() {
+	quota := &AIQuotaService{}
+
+	type userCount struct {
+		UserID uint
+		N      int64
+	}
+
+	// 追问：每条 pending/running 的 assistant 占位行，都是在 ReviewChatService.Ask
+	// 里扣过 1 点的 —— 占位行与扣点同生共死
+	var chats []userCount
+	if err := config.DB.Model(&models.ReviewMessage{}).
+		Select("user_id, COUNT(*) AS n").
+		Where("role = ? AND status IN ?", models.MessageRoleAssistant,
+			[]string{models.MessageStatusPending, models.MessageStatusRunning}).
+		Group("user_id").Scan(&chats).Error; err != nil {
+		log.Printf("[回收] 统计待退点的追问失败: %v", err)
+	} else {
+		for _, c := range chats {
+			quota.RefundPoints(c.UserID, int(c.N)*config.AICostChat)
+		}
+	}
+
+	// 对手画像：每次生成（含首次）都扣了 3 点
+	var profiles []userCount
+	if err := config.DB.Model(&models.OpponentProfile{}).
+		Select("user_id, COUNT(*) AS n").
+		Where("status IN ?",
+			[]string{models.SummaryStatusPending, models.SummaryStatusRunning}).
+		Group("user_id").Scan(&profiles).Error; err != nil {
+		log.Printf("[回收] 统计待退点的画像失败: %v", err)
+	} else {
+		for _, p := range profiles {
+			quota.RefundPoints(p.UserID, int(p.N)*config.AICostOpponentProfile)
+		}
 	}
 }

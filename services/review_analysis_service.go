@@ -26,6 +26,7 @@ type ReviewAnalysisService struct {
 	reviewService *ReviewService
 	aiClient      *AIClient
 	aiSettingSvc  *AISettingService
+	aiQuotaSvc    *AIQuotaService
 	memoryService *ReviewMemoryService
 	suggestionSvc *TagSuggestionService
 }
@@ -35,58 +36,54 @@ func NewReviewAnalysisService() *ReviewAnalysisService {
 		reviewService: NewReviewService(),
 		aiClient:      NewAIClient(),
 		aiSettingSvc:  &AISettingService{},
+		aiQuotaSvc:    &AIQuotaService{},
 		memoryService: NewReviewMemoryService(),
 		suggestionSvc: &TagSuggestionService{},
 	}
 }
 
-// AIStatus 前端用来判断能否触发分析
-type AIStatus struct {
-	Enabled    bool `json:"enabled"`
-	DailyLimit int  `json:"dailyLimit"`
-	UsedToday  int  `json:"usedToday"`
-	Remaining  int  `json:"remaining"`
+// AIPointCosts 各项功能的点数价格。
+//
+// 与 config 里的常量同源，发给前端让每个按钮各自判断够不够，
+// 也免得前端硬编码"3 点"——改价只改 config 一处
+type AIPointCosts struct {
+	Analysis        int `json:"analysis"`
+	OpponentProfile int `json:"opponentProfile"`
+	ProfileSummary  int `json:"profileSummary"`
+	Chat            int `json:"chat"`
 }
 
-// GetAIStatus 返回 AI 可用状态与今日剩余额度。
+// AIStatus 前端用来判断能否触发分析
+type AIStatus struct {
+	Enabled bool `json:"enabled"`
+	// Remaining 剩余点数。自 2026-10 起是**累计总额**，不再按天重置；
+	// 用完由运营改 user_ai_quotas.points 充值
+	Remaining int          `json:"remaining"`
+	Costs     AIPointCosts `json:"costs"`
+}
+
+// GetAIStatus 返回 AI 可用状态与剩余点数。
 //
 // 前端据此把按钮置灰并说明原因，比让用户点了再看到失败要好。
 //
-// Enabled 自 BYOK 起是**该用户**是否配了可用的模型，不再是"服务端配没配 Key"
-func (s *ReviewAnalysisService) GetAIStatus(userID uint) *AIStatus {
-	settings := config.AIConfig()
-	status := &AIStatus{
-		Enabled:    s.aiSettingSvc.HasUsableConfig(userID),
-		DailyLimit: settings.DailyLimit,
+// Enabled 的语义是"AI 总共能不能用"：服务端配了兜底 Key（AI_SERVER_API_KEY）
+// 之后对所有人恒为 true，只有连服务端都没配时才 false
+func (s *ReviewAnalysisService) GetAIStatus(userID uint) (*AIStatus, error) {
+	remaining, err := s.aiQuotaSvc.GetPoints(userID)
+	if err != nil {
+		return nil, err
 	}
-	status.UsedToday = s.countTodayUsage(userID)
-	status.Remaining = status.DailyLimit - status.UsedToday
-	if status.Remaining < 0 {
-		status.Remaining = 0
-	}
-	return status
-}
 
-// countTodayUsage 统计用户今天用掉的模型调用次数。
-//
-// **对手画像的生成也算在内**：额度管的是"每天最多调用多少次模型"，
-// 不是"多少次手牌分析"。只算分析的话，用户反复点"生成对手画像"就能绕开这个限制，
-// 而每次都在真实地烧钱
-//
-// 画像按 updated_at 判：一张画像只有一行，每次任务都会把它顶到今天。
-// 用 last_generated_at 会漏掉失败的那几次 —— 失败也调用了模型，也该计数
-func (s *ReviewAnalysisService) countTodayUsage(userID uint) int {
-	now := time.Now()
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-
-	var analyses, profiles int64
-	config.DB.Model(&models.ReviewAnalysis{}).
-		Where("user_id = ? AND created_at >= ?", userID, startOfDay).
-		Count(&analyses)
-	config.DB.Model(&models.OpponentProfile{}).
-		Where("user_id = ? AND updated_at >= ?", userID, startOfDay).
-		Count(&profiles)
-	return int(analyses + profiles)
+	return &AIStatus{
+		Enabled:   s.aiSettingSvc.HasUsableConfig(userID),
+		Remaining: remaining,
+		Costs: AIPointCosts{
+			Analysis:        config.AICostAnalysis,
+			OpponentProfile: config.AICostOpponentProfile,
+			ProfileSummary:  config.AICostProfileSummary,
+			Chat:            config.AICostChat,
+		},
+	}, nil
 }
 
 // RequestAnalysis 触发一次分析。
@@ -146,10 +143,13 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		return nil, false, err
 	}
 
-	// 额度检查放在缓存判断之后：复用不花钱，不该被额度挡掉
-	status := s.GetAIStatus(userID)
-	if status.Remaining <= 0 {
-		return nil, false, fmt.Errorf("今日分析次数已用完（上限 %d 次），明天再来", status.DailyLimit)
+	// 扣点放在**缓存复用与在途检查之后**：复用不花钱，不该被额度挡掉。
+	// DeductPoints 是原子的条件更新（points >= cost），并发点两次也不会超支
+	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostAnalysis); err != nil {
+		if errors.Is(err, ErrInsufficientPoints) {
+			return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
+		}
+		return nil, false, err
 	}
 
 	analysis := &models.ReviewAnalysis{
@@ -163,6 +163,8 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 	}
 
 	if err := config.DB.Create(analysis).Error; err != nil {
+		// 记录都没建起来，分析根本没跑 —— 点退回去
+		s.aiQuotaSvc.RefundPoints(userID, config.AICostAnalysis)
 		return nil, false, err
 	}
 
@@ -195,13 +197,13 @@ func (s *ReviewAnalysisService) runAnalysis(
 	settings AICallSettings,
 ) {
 	start := time.Now()
-	analysisID, handID := analysis.ID, hand.ID
+	analysisID, handID, userID := analysis.ID, hand.ID, analysis.UserID
 
 	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[分析 %d] panic: %v", analysisID, r)
-			s.failAnalysis(analysisID, handID, fmt.Sprintf("内部错误: %v", r), time.Since(start))
+			s.failAnalysis(userID, analysisID, handID, fmt.Sprintf("内部错误: %v", r), time.Since(start))
 		}
 	}()
 
@@ -210,12 +212,12 @@ func (s *ReviewAnalysisService) runAnalysis(
 
 	// 不设超时。K3 这类「始终推理」模型一篇分析要跑几分钟，掐断的话这次调用
 	// 已经烧掉的推理 token 全白花，用户还拿不到结论 —— 钱和时间都亏两次。
-	// 单次调用能持续多久交给模型自己决定，我们只管每日次数（AIDailyLimit）
+	// 单次调用能持续多久交给模型自己决定，我们只管"每人累计点数"（user_ai_quotas）
 	ctx := context.Background()
 
 	tags, err := s.reviewService.GetLeakTagModels()
 	if err != nil {
-		s.failAnalysis(analysisID, handID, "读取标签字典失败: "+err.Error(), time.Since(start))
+		s.failAnalysis(userID, analysisID, handID, "读取标签字典失败: "+err.Error(), time.Since(start))
 		return
 	}
 
@@ -226,7 +228,7 @@ func (s *ReviewAnalysisService) runAnalysis(
 
 	result, err := s.aiClient.CompleteJSON(ctx, settings, system, user)
 	if err != nil {
-		s.failAnalysis(analysisID, handID, err.Error(), time.Since(start))
+		s.failAnalysis(userID, analysisID, handID, err.Error(), time.Since(start))
 		return
 	}
 
@@ -235,7 +237,7 @@ func (s *ReviewAnalysisService) runAnalysis(
 		// 解析失败时把原始返回存下来，否则事后完全无法排查模型到底吐了什么
 		analysis.RawOutput = result.Content
 		config.DB.Model(analysis).Update("raw_output", result.Content)
-		s.failAnalysis(analysisID, handID, "解析模型输出失败: "+parseErr.Error(), time.Since(start))
+		s.failAnalysis(userID, analysisID, handID, "解析模型输出失败: "+parseErr.Error(), time.Since(start))
 		return
 	}
 
@@ -254,7 +256,7 @@ func (s *ReviewAnalysisService) runAnalysis(
 	// map 形式的更新不会经过字段序列化器，Result 这个 json 列会被原样扔给
 	// 数据库驱动并报 "unsupported type ... a struct"，结果永远写不进去
 	if err := config.DB.Save(analysis).Error; err != nil {
-		s.failAnalysis(analysisID, handID, "保存分析结果失败: "+err.Error(), time.Since(start))
+		s.failAnalysis(userID, analysisID, handID, "保存分析结果失败: "+err.Error(), time.Since(start))
 		return
 	}
 
@@ -330,7 +332,11 @@ func (s *ReviewAnalysisService) recordMemory(analysis *models.ReviewAnalysis, ha
 	s.memoryService.MaybeRewriteSummary(hand.UserID)
 }
 
-func (s *ReviewAnalysisService) failAnalysis(analysisID, handID uint, msg string, elapsed time.Duration) {
+// failAnalysis 把分析标记为失败，并**退还本次扣的点数**。
+//
+// 退点放在这里而不是每个失败分支各写一遍：所有失败路径都汇到这一个函数，
+// 用户没拿到结果就不该扣（2026-10 拍板）
+func (s *ReviewAnalysisService) failAnalysis(userID, analysisID, handID uint, msg string, elapsed time.Duration) {
 	log.Printf("[分析 %d] 失败: %s", analysisID, msg)
 	config.DB.Model(&models.ReviewAnalysis{}).Where("id = ?", analysisID).
 		Updates(map[string]interface{}{
@@ -340,6 +346,8 @@ func (s *ReviewAnalysisService) failAnalysis(analysisID, handID uint, msg string
 		})
 	config.DB.Model(&models.ReviewHand{}).Where("id = ?", handID).
 		Update("analyze_status", models.AnalyzeStatusFailed)
+
+	s.aiQuotaSvc.RefundPoints(userID, config.AICostAnalysis)
 }
 
 // GetAnalysis 读一条分析，按 user_id 过滤，别人的分析表现为不存在

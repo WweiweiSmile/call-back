@@ -59,6 +59,7 @@ func main() {
 		&models.ReviewMessage{},
 		&models.ReviewTagSuggestion{},
 		&models.UserPreference{},
+		&models.UserAIQuota{},
 		&models.Opponent{},
 		&models.OpponentProfile{},
 	); err != nil {

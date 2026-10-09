@@ -13,11 +13,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// aiNotConfiguredMsg 所有"没配模型"场景共用的一句提示。
+// aiNotConfiguredMsg 所有"没有可用模型"场景共用的一句提示。
 //
-// 三个调用链路（分析 / 追问 / 画像总结）都会把它透给用户，文案必须一致且可行动：
-// 只说要做什么，不说"未启用"这种用户无从下手的描述
-const aiNotConfiguredMsg = "还没配置 AI 模型，请到「设置 → 模型设置」填写你自己的 API Key"
+// 自 2026-10 起服务端会配兜底 Key（AI_SERVER_API_KEY），普通用户不需要配任何东西。
+// 所以走到这里说明**连服务端都没配** —— 那是运维问题，用户能做的只有反馈，
+// 再让用户"去设置页填 Key"是把他引到一条走不通的路上
+const aiNotConfiguredMsg = "AI 分析暂不可用，请联系管理员"
 
 // AISettingService 用户的模型配置（BYOK：地址 + 模型名 + 用户自己的 API Key）。
 //
@@ -88,18 +89,50 @@ func (s *AISettingService) Update(userID uint, req *dto.UpdateAIModelSettingsReq
 
 // ResolveCallSettings 解析该用户本次模型调用要用的凭据。
 //
-// 错误文案会经 error_msg 落库并展示给用户，所以每一句都必须可行动 ——
-// 用户看完就知道要去哪儿改什么
+// 凭据有两级来源，**用户自己的优先**：
+//  1. 用户配过自己的 Key（BYOK）→ 用自己的
+//  2. 否则服务端配了 AI_SERVER_API_KEY → 用服务端兜底
+//  3. 都没有 → 报错
+//
+// 保留 BYOK 优先而不是"一律走服务端"，是为了让"设置 → 模型设置"（管理员可见）
+// 仍然真的有效：管理员配了自己的 Key 就用自己的
+//
+// 错误文案会经 error_msg 落库并展示给用户，所以每一句都必须可行动
 func (s *AISettingService) ResolveCallSettings(userID uint) (*AICallSettings, error) {
 	pref, err := s.loadPreferenceOrNew(userID)
 	if err != nil {
 		return nil, err
 	}
 
-	if pref.AIAPIKeyEncrypted == "" {
+	if pref.AIAPIKeyEncrypted != "" {
+		return s.resolveByok(userID, pref)
+	}
+
+	// 没有自备 Key，落服务端兜底
+	server := config.AIServerConfig()
+	if server.APIKey == "" {
 		return nil, errors.New(aiNotConfiguredMsg)
 	}
 
+	// 服务端这几项是运维配置，用户改不了 —— 出错只留日志，给用户一句泛化的提示
+	baseURL, err := utils.ValidateAIBaseURL(server.BaseURL)
+	if err != nil {
+		log.Printf("[模型配置] 服务端地址不合法: %v", err)
+		return nil, errors.New(aiNotConfiguredMsg)
+	}
+	if err := utils.ValidateAIModel(server.Model); err != nil {
+		log.Printf("[模型配置] 服务端模型名不合法: %v", err)
+		return nil, errors.New(aiNotConfiguredMsg)
+	}
+
+	return &AICallSettings{APIKey: server.APIKey, BaseURL: baseURL, Model: server.Model}, nil
+}
+
+// resolveByok 走用户自备 Key 那一路。
+//
+// 保存时已经校验过，这里再跑一次是第二道闸：防的是有人直接改库塞进一个内网地址。
+// 纯函数，成本为零
+func (s *AISettingService) resolveByok(userID uint, pref *models.UserPreference) (*AICallSettings, error) {
 	apiKey, err := utils.DecryptSecret(pref.AIAPIKeyEncrypted)
 	if err != nil {
 		// 主密钥缺失或轮换过都会走到这里。用户那边看到的应该是"重新填一把"，
@@ -110,8 +143,6 @@ func (s *AISettingService) ResolveCallSettings(userID uint) (*AICallSettings, er
 
 	baseURL, model := resolveAIValues(pref.AIBaseURL, pref.AIModel)
 
-	// 保存时已经校验过，这里再跑一次是第二道闸：防的是有人直接改库
-	// 塞进一个内网地址。纯函数，成本为零
 	baseURL, err = utils.ValidateAIBaseURL(baseURL)
 	if err != nil {
 		log.Printf("[模型配置] 地址不合法 user=%d: %v", userID, err)

@@ -379,16 +379,26 @@ func (c *ReviewController) GetHandAnalyses(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.ReviewAnalysisListResponse{List: items}))
 }
 
-// GetAIStatus AI 是否可用、今日还剩几次
+// GetAIStatus AI 是否可用、还剩多少点
 func (c *ReviewController) GetAIStatus(ctx *gin.Context) {
 	userID := middleware.GetUserID(ctx)
-	status := c.analysisSvc.GetAIStatus(userID)
+
+	status, err := c.analysisSvc.GetAIStatus(userID)
+	if err != nil {
+		// 读不到就报错，不要静默给一个错余额 —— 前端会据此置灰按钮
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse("读取 AI 额度失败: "+err.Error()))
+		return
+	}
 
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.AIStatusResponse{
-		Enabled:    status.Enabled,
-		DailyLimit: status.DailyLimit,
-		UsedToday:  status.UsedToday,
-		Remaining:  status.Remaining,
+		Enabled:   status.Enabled,
+		Remaining: status.Remaining,
+		Costs: dto.AIPointCostsResponse{
+			Analysis:        status.Costs.Analysis,
+			OpponentProfile: status.Costs.OpponentProfile,
+			ProfileSummary:  status.Costs.ProfileSummary,
+			Chat:            status.Costs.Chat,
+		},
 	}))
 }
 
@@ -416,12 +426,16 @@ func (c *ReviewController) GetProfile(ctx *gin.Context) {
 // 与「分析手牌」同一套，前端据 summaryStatus 轮询 GET /profile。
 // 一次 K3 调用要跑几分钟，同步接口必然被前端或网关先掐断。
 //
-// 同步报错的只剩"没配模型""画像里还没有洞察"这类；模型调用失败会落在
+// charge=true：这是**手动**触发，扣 3 点。自动重写（分析后）走同一入口但传 false，
+// 因为它含在复盘那 3 点里。扣点发生在"确认真会重写"之后 —— 没有洞察可写、
+// 或已有一次在跑，都不会扣
+//
+// 同步报错的只剩"没配模型""点数不足""画像里还没有洞察"这类；模型调用失败会落在
 // summaryStatus=failed 上，由前端展示
 func (c *ReviewController) RefreshProfileSummary(ctx *gin.Context) {
 	userID := middleware.GetUserID(ctx)
 
-	profile, _, err := c.memorySvc.StartSummaryRewrite(userID)
+	profile, _, err := c.memorySvc.StartSummaryRewrite(userID, true)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return

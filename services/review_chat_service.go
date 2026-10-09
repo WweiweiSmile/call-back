@@ -38,6 +38,7 @@ type ReviewChatService struct {
 	memoryService *ReviewMemoryService
 	aiClient      *AIClient
 	aiSettingSvc  *AISettingService
+	aiQuotaSvc    *AIQuotaService
 }
 
 func NewReviewChatService() *ReviewChatService {
@@ -46,6 +47,7 @@ func NewReviewChatService() *ReviewChatService {
 		memoryService: NewReviewMemoryService(),
 		aiClient:      NewAIClient(),
 		aiSettingSvc:  &AISettingService{},
+		aiQuotaSvc:    &AIQuotaService{},
 	}
 }
 
@@ -86,7 +88,7 @@ func (s *ReviewChatService) Ask(
 	}
 
 	// 这次分析已有追问在跑：把那一对原样还回去，不要再起一次模型调用。
-	// 追问不计额度，但一次 K3 追问是几分钟的和真金白银，重复提交不该并行烧两份
+	// 一次 K3 追问是几分钟和真金白银，重复提交不该并行烧两份
 	if pair, found, err := s.inflightPair(userID, analysisID, analysis.HandID); err != nil {
 		return nil, nil, false, err
 	} else if found {
@@ -97,6 +99,15 @@ func (s *ReviewChatService) Ask(
 	// 那条已经在跑的记录 —— 它跟配置没关系
 	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
 	if err != nil {
+		return nil, nil, false, err
+	}
+
+	// 扣点同样排在两道早返回之后：命中在飞闸时返回的是已有那条，没起新调用。
+	// 一轮追问 1 点
+	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostChat); err != nil {
+		if errors.Is(err, ErrInsufficientPoints) {
+			return nil, nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
+		}
 		return nil, nil, false, err
 	}
 
@@ -127,11 +138,13 @@ func (s *ReviewChatService) Ask(
 		}
 		return tx.Create(assistantMsg).Error
 	}); err != nil {
+		// 一条都没写进去，模型也不会被调用 —— 点退回去
+		s.aiQuotaSvc.RefundPoints(userID, config.AICostChat)
 		return nil, nil, false, fmt.Errorf("保存对话失败: %w", err)
 	}
 
 	// 值拷贝传进后台：HTTP 响应正在读这两条序列化返回，后台同时改它们就是数据竞争
-	go s.answer(*userMsg, *assistantMsg, hand, *settings)
+	go s.answer(*userMsg, *assistantMsg, hand, *settings, true)
 
 	return userMsg, assistantMsg, false, nil
 }
@@ -145,14 +158,22 @@ func (s *ReviewChatService) answer(
 	assistantMsg models.ReviewMessage,
 	hand *models.ReviewHand,
 	settings AICallSettings,
+	charged bool,
 ) {
 	assistantID := assistantMsg.ID
+
+	// succeeded 只在**这一轮回答真的写回成功**时置位。其余所有返回路径都算没产出，
+	// charged 时要退点
+	succeeded := false
 
 	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[追问 %d] panic: %v", assistantID, r)
 			s.failMessage(assistantID, fmt.Sprintf("内部错误: %v", r))
+		}
+		if charged && !succeeded {
+			s.aiQuotaSvc.RefundPoints(userMsg.UserID, config.AICostChat)
 		}
 	}()
 
@@ -205,6 +226,9 @@ func (s *ReviewChatService) answer(
 			"error_msg":  "",
 		}).Error; err != nil {
 		log.Printf("[追问 %d] 写回失败: %v", assistantID, err)
+	} else {
+		// 真的写出去了，才算这一轮产出 —— defer 里的退点据此判断
+		succeeded = true
 	}
 }
 

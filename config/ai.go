@@ -1,7 +1,20 @@
 package config
 
 const (
+	// defaultAIDailyLimit 仅剩兼容旧 .env 用，不再是任何额度判据（见 Config.AIDailyLimit）
 	defaultAIDailyLimit = 30
+
+	// DefaultAIPointLimit 新用户的初始 AI 点数。
+	// 9 点 = 3 次复盘，也可以拆成 9 轮追问或 3 次画像。
+	// 与 models.UserAIQuota 的 gorm default 必须保持一致
+	DefaultAIPointLimit = 9
+
+	// 各功能消耗的点数。**单一事实来源**：扣点处（services）与 /ai-status 响应（dto）共用。
+	// 口径：1 次复盘 = 3 轮追问 = 1 次画像更新
+	AICostAnalysis        = 3
+	AICostOpponentProfile = 3
+	AICostProfileSummary  = 3
+	AICostChat            = 1
 
 	// DefaultAIBaseURL / DefaultAIModel 默认预设的兜底值。
 	// 部署方可以用 DEEPSEEK_BASE_URL / DEEPSEEK_MODEL 覆盖
@@ -11,15 +24,16 @@ const (
 
 // AISettings AI 分析的**服务端级**运行时参数。
 //
-// 凭据与模型名自 BYOK 起按用户解析，不在这个结构里 ——
-// 它们来自 user_preferences，由 services.AISettingService.ResolveCallSettings 给出
+// 凭据与模型名不在这个结构里 —— 自 2026-10 起凭据有两级来源：
+// 用户自己的（BYOK，存 user_preferences）优先，其次服务端 Key（AI_SERVER_API_KEY）。
+// 解析统一走 services.AISettingService.ResolveCallSettings
 //
 // 刻意没有"单次调用超时"这一项：K3 这类「始终推理」模型的思考时间不受我们控制，
 // 一次分析可能要几分钟，掐断只会把已经烧掉的推理 token 白白扔掉。
 // 详见 services/ai_client.go 里关于不设超时的说明
 type AISettings struct {
-	// DailyLimit 单用户每日分析次数上限
-	DailyLimit int
+	// PointLimit 新用户的初始点数
+	PointLimit int
 }
 
 // AIConfig 读取 AI 运行时参数。
@@ -28,15 +42,43 @@ type AISettings struct {
 // 一套默认值 —— 否则任何在 LoadConfig 之前构造的组件（比如只注册路由的
 // 单测）都会 nil 解引用崩溃。
 func AIConfig() AISettings {
-	limit := defaultAIDailyLimit
+	limit := DefaultAIPointLimit
 
 	if AppConfig != nil {
-		if AppConfig.AIDailyLimit > 0 {
-			limit = AppConfig.AIDailyLimit
+		if AppConfig.AIPointLimit > 0 {
+			limit = AppConfig.AIPointLimit
 		}
 	}
 
-	return AISettings{DailyLimit: limit}
+	return AISettings{PointLimit: limit}
+}
+
+// AIServerSettings 服务端兜底的模型凭据（AI_SERVER_*）
+type AIServerSettings struct {
+	// APIKey 为空表示没有服务端兜底 —— 那时只有自备 Key 的用户能用 AI 分析
+	APIKey  string
+	BaseURL string
+	Model   string
+}
+
+// AIServerConfig 读服务端凭据。与 AIConfig 同理是 nil-safe 的，
+// 且刻意不复用 DeepSeek* —— 那三个字段现在服务的是 BYOK 设置页的预填值
+func AIServerConfig() AIServerSettings {
+	key := ""
+	baseURL := DefaultAIBaseURL
+	model := DefaultAIModel
+
+	if AppConfig != nil {
+		key = AppConfig.ServerAIAPIKey
+		if AppConfig.ServerAIBaseURL != "" {
+			baseURL = AppConfig.ServerAIBaseURL
+		}
+		if AppConfig.ServerAIModel != "" {
+			model = AppConfig.ServerAIModel
+		}
+	}
+
+	return AIServerSettings{APIKey: key, BaseURL: baseURL, Model: model}
 }
 
 // AIPreset 一个预设供应商，供设置页一键填充

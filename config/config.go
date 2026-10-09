@@ -46,9 +46,18 @@ type Config struct {
 	// 时看到的预填值就是它们
 	DeepSeekBaseURL string
 	DeepSeekModel   string
-	// AIDailyLimit 单用户每日分析次数上限，防止额度被刷爆。
-	// 不区分用的是谁的 Key —— 卡的是"这个账号一天能发起多少次分析"
+	// Deprecated: 每日额度自 2026-10 起被"每人累计点数"取代
+	// （见 AIPointLimit 与 models.UserAIQuota）。保留字段只为兼容旧 .env，代码不再读
 	AIDailyLimit int
+	// AIPointLimit 新用户的初始 AI 点数（默认 9 = 3 次复盘）。
+	// 已存在的用户改库里的 user_ai_quotas.points，不受这里影响
+	AIPointLimit int
+	// ServerAIAPIKey 服务端兜底的模型 Key。为空时**不做兜底** ——
+	// 那时只有自备 Key（BYOK）的用户能用 AI 分析。
+	// 刻意不复用已废弃的 DeepSeekAPIKey：那个字段现在的用途是 BYOK 设置页预填
+	ServerAIAPIKey  string
+	ServerAIBaseURL string
+	ServerAIModel   string
 	// Deprecated: 恒等于 DeepSeekAPIKey != ""，不再是"AI 是否可用"的判据。
 	// 用户级的可用性判断在 services.AISettingService.HasUsableConfig
 	AIEnabled bool
@@ -92,13 +101,26 @@ func LoadConfig() error {
 		DeepSeekBaseURL: GetEnv("DEEPSEEK_BASE_URL", DefaultAIBaseURL),
 		DeepSeekModel:   GetEnv("DEEPSEEK_MODEL", DefaultAIModel),
 		AIDailyLimit:    GetEnvInt("AI_DAILY_LIMIT", defaultAIDailyLimit),
+		AIPointLimit:    GetEnvInt("AI_POINT_LIMIT", DefaultAIPointLimit),
+		ServerAIAPIKey:  GetEnv("AI_SERVER_API_KEY", ""),
+		ServerAIBaseURL: GetEnv("AI_SERVER_BASE_URL", DefaultAIBaseURL),
+		ServerAIModel:   GetEnv("AI_SERVER_MODEL", DefaultAIModel),
 		AIEnabled:       apiKey != "",
 	}
 
 	preset := DefaultAIPreset()
-	log.Printf("AI 分析使用用户自备 Key；默认预设 %s / %s", preset.BaseURL, preset.Model)
+	if AppConfig.ServerAIAPIKey != "" {
+		log.Printf("AI 分析：服务端兜底 Key 已配置（%s / %s），新用户初始 %d 点",
+			AppConfig.ServerAIBaseURL, AppConfig.ServerAIModel, AppConfig.AIPointLimit)
+	} else {
+		log.Println("Warning: 未配置 AI_SERVER_API_KEY —— 只有自备 Key 的用户能用 AI 分析")
+	}
+	log.Printf("BYOK 设置页默认预设 %s / %s", preset.BaseURL, preset.Model)
 	if apiKey != "" {
-		log.Println("Warning: DEEPSEEK_API_KEY 已废弃，自 BYOK 起不再对任何用户生效（Key 现在按用户存在 user_preferences 里）")
+		log.Println("Warning: DEEPSEEK_API_KEY 已废弃，不再对任何用户生效（服务端兜底请用 AI_SERVER_API_KEY）")
+	}
+	if GetEnv("AI_DAILY_LIMIT", "") != "" {
+		log.Println("Warning: AI_DAILY_LIMIT 已废弃，额度改为「每人累计点数」（user_ai_quotas.points），这行可以从 .env 里删掉")
 	}
 	// 只提示，不读值：AI 调用不再设超时（K3 这类「始终推理」模型一次分析要几分钟，
 	// 掐断等于把已经烧掉的推理 token 白白扔掉）。留着这行会让运维误以为它还能调

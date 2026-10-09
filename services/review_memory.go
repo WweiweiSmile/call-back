@@ -4,6 +4,7 @@ import (
 	"call-go/config"
 	"call-go/models"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -82,12 +83,14 @@ func (w ProfileWindow) IsThin() bool {
 type ReviewMemoryService struct {
 	aiClient     *AIClient
 	aiSettingSvc *AISettingService
+	aiQuotaSvc   *AIQuotaService
 }
 
 func NewReviewMemoryService() *ReviewMemoryService {
 	return &ReviewMemoryService{
 		aiClient:     NewAIClient(),
 		aiSettingSvc: &AISettingService{},
+		aiQuotaSvc:   &AIQuotaService{},
 	}
 }
 
@@ -532,8 +535,9 @@ func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 
 	// 这里跑在分析的后台 goroutine 里，拿不到"同步报错给用户"的时机，
 	// 失败只记日志，下次分析会再触发。
-	// 走的是与手动点同一入口，于是共用同一道在飞闸与同一套状态机
-	if _, _, err := s.StartSummaryRewrite(userID); err != nil {
+	// 走的是与手动点同一入口，于是共用同一道在飞闸与同一套状态机。
+	// charge=false：自动重写是复盘的子步骤，含在那 3 点里，不另扣
+	if _, _, err := s.StartSummaryRewrite(userID, false); err != nil {
 		log.Printf("[记忆] 重写总结失败 user=%d: %v", userID, err)
 	}
 }
@@ -548,9 +552,12 @@ func (s *ReviewMemoryService) MaybeRewriteSummary(userID uint) {
 // 而不是几秒后才发现的一次失败；自动触发路径（分析成功后）忽略这个错误，
 // 只记日志
 //
+// charge 表示这次要不要扣点：**手动点（controller）传 true，自动重写传 false**。
+// 自动重写是复盘的子步骤，成本已经含在复盘那 3 点里，不能再扣一次
+//
 // 第二个返回值表示"没有新建任务"，两种来源：没有洞察可写（无事可做），
 // 或已有一条在跑的（把当前画像原样还回去，前端继续轮询即可）
-func (s *ReviewMemoryService) StartSummaryRewrite(userID uint) (*models.ReviewProfile, bool, error) {
+func (s *ReviewMemoryService) StartSummaryRewrite(userID uint, charge bool) (*models.ReviewProfile, bool, error) {
 	// 顺带拿到统计窗口：提示词必须告诉模型这些数字覆盖了多大的样本，
 	// 以及"窗口内没再出现"意味着进步
 	profile, _, err := s.refreshProfile(userID)
@@ -579,6 +586,17 @@ func (s *ReviewMemoryService) StartSummaryRewrite(userID uint) (*models.ReviewPr
 		return profile, true, nil
 	}
 
+	// 扣点放在所有"无事可做"的早返回**之后**：没有洞察可写、或已有一次在跑，
+	// 都没启动新的模型调用，不该扣
+	if charge {
+		if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostProfileSummary); err != nil {
+			if errors.Is(err, ErrInsufficientPoints) {
+				return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
+			}
+			return nil, false, err
+		}
+	}
+
 	now := time.Now()
 	if err := config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
 		Updates(map[string]interface{}{
@@ -586,6 +604,10 @@ func (s *ReviewMemoryService) StartSummaryRewrite(userID uint) (*models.ReviewPr
 			"summary_error":      "",
 			"summary_started_at": now,
 		}).Error; err != nil {
+		// 任务没起来，点退回去
+		if charge {
+			s.aiQuotaSvc.RefundPoints(userID, config.AICostProfileSummary)
+		}
 		return nil, false, fmt.Errorf("标记总结任务失败: %w", err)
 	}
 
@@ -596,8 +618,9 @@ func (s *ReviewMemoryService) StartSummaryRewrite(userID uint) (*models.ReviewPr
 	profile.SummaryError = ""
 	profile.SummaryStartedAt = &now
 
-	// 值拷贝传进后台：HTTP 响应正在读这个结构体序列化返回
-	go s.runSummary(userID, *settings)
+	// 值拷贝传进后台：HTTP 响应正在读这个结构体序列化返回。
+	// charged 一并传进去 —— 后台失败时要按它决定退不退点
+	go s.runSummary(userID, *settings, charge)
 
 	return profile, false, nil
 }
@@ -623,12 +646,20 @@ func (s *ReviewMemoryService) summaryInflight(userID uint) (bool, error) {
 //
 // 传的是「已有总结 + 新增洞察 + 标签统计」，让模型做增量更新而不是从零重写：
 // 从零重写会让它把注意力全放在最新几手牌上，总结随最新一手牌剧烈摆动。
-func (s *ReviewMemoryService) runSummary(userID uint, settings AICallSettings) {
+func (s *ReviewMemoryService) runSummary(userID uint, settings AICallSettings, charged bool) {
+	// succeeded 只在**真的写出了总结**时置位。除它以外的所有返回路径
+	//（失败、以及"洞察跑到一半被删光"那个提前返回）都算没产出 —— charged 时要退点。
+	// 集中在这一处判断，好过在每个失败分支各写一遍退点
+	succeeded := false
+
 	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[记忆] 总结重写 panic user=%d: %v", userID, r)
 			s.failSummary(userID, fmt.Sprintf("内部错误: %v", r))
+		}
+		if charged && !succeeded {
+			s.aiQuotaSvc.RefundPoints(userID, config.AICostProfileSummary)
 		}
 	}()
 
@@ -704,6 +735,9 @@ func (s *ReviewMemoryService) runSummary(userID uint, settings AICallSettings) {
 		s.failSummary(userID, "保存总结失败: "+err.Error())
 		return
 	}
+
+	// 到这里才算真的产出了 —— 置位之后 defer 里的退点就不会执行
+	succeeded = true
 
 	log.Printf("[记忆] 画像总结已重写 user=%d 新增洞察=%d tokens=%d/%d",
 		userID, len(newInsights), completion.TokensIn, completion.TokensOut)

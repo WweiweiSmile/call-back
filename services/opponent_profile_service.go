@@ -36,16 +36,16 @@ type opponentProfileResult struct {
 type OpponentProfileService struct {
 	aiClient     *AIClient
 	aiSettingSvc *AISettingService
+	aiQuotaSvc   *AIQuotaService
 	opponentSvc  *OpponentService
-	analysisSvc  *ReviewAnalysisService
 }
 
 func NewOpponentProfileService() *OpponentProfileService {
 	return &OpponentProfileService{
 		aiClient:     NewAIClient(),
 		aiSettingSvc: &AISettingService{},
+		aiQuotaSvc:   &AIQuotaService{},
 		opponentSvc:  &OpponentService{},
-		analysisSvc:  NewReviewAnalysisService(),
 	}
 }
 
@@ -103,22 +103,27 @@ func (s *OpponentProfileService) StartGeneration(userID, opponentID uint) (*mode
 		return current, true, nil
 	}
 
-	// 额度检查放在"有手牌"与"已配模型"之后：前面两条都过不了的话，
-	// 用户该看到的是"没有手牌"而不是"额度用完了"
-	if status := s.analysisSvc.GetAIStatus(userID); status.Remaining <= 0 {
-		return nil, false, fmt.Errorf("今日 AI 调用次数已用完（上限 %d 次），明天再来", status.DailyLimit)
+	// 扣点放在"有手牌""已配模型""在途"三道早返回**之后**：前面任一条过不了，
+	// 用户该看到的是那条原因，而不是"点数不足"；也没启动模型调用，不该扣
+	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostOpponentProfile); err != nil {
+		if errors.Is(err, ErrInsufficientPoints) {
+			return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
+		}
+		return nil, false, err
 	}
 
 	now := time.Now()
 	profile, err := s.upsertPending(userID, opponentID, now)
 	if err != nil {
+		// 任务没起来，点退回去
+		s.aiQuotaSvc.RefundPoints(userID, config.AICostOpponentProfile)
 		return nil, false, err
 	}
 
 	// 值拷贝传进后台：HTTP 响应正在读这个结构体序列化返回
 	handsCopy := hands
 	name := opponent.Name
-	go s.runGeneration(userID, opponentID, name, *settings, handsCopy)
+	go s.runGeneration(userID, opponentID, name, *settings, handsCopy, true)
 
 	return profile, false, nil
 }
@@ -187,12 +192,20 @@ func (s *OpponentProfileService) runGeneration(
 	opponentName string,
 	settings AICallSettings,
 	hands []models.ReviewHand,
+	charged bool,
 ) {
+	// succeeded 只在**画像真的落库**时置位。其余所有返回路径都算没产出，
+	// charged 时要退点 —— 集中在一处判断，好过每个失败分支各写一遍
+	succeeded := false
+
 	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[画像] 生成 panic user=%d opponent=%d: %v", userID, opponentID, r)
 			s.failProfile(userID, opponentID, fmt.Sprintf("内部错误: %v", r))
+		}
+		if charged && !succeeded {
+			s.aiQuotaSvc.RefundPoints(userID, config.AICostOpponentProfile)
 		}
 	}()
 
@@ -267,6 +280,9 @@ func (s *OpponentProfileService) runGeneration(
 		s.failProfile(userID, opponentID, "保存画像失败: "+err.Error())
 		return
 	}
+
+	// 到这儿才算真的产出了 —— 置位之后 defer 里的退点就不会执行
+	succeeded = true
 
 	log.Printf("[画像] 已生成 user=%d opponent=%d 手数=%d 形象=%s tokens=%d/%d",
 		userID, opponentID, stats.Hands, result.Profile, completion.TokensIn, completion.TokensOut)

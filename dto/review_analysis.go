@@ -53,13 +53,23 @@ type RequestAnalysisResponse struct {
 
 // AIStatusResponse AI 可用状态
 //
-// Enabled 自 BYOK 起是"该用户是否配了可用的模型"，不再是"服务端配没配 Key"。
-// 字段刻意一个都没加：前端只关心能不能点，具体配的是什么去设置页看
+// 自 2026-10 起额度是**每人累计点数**（不再按天重置），且运营可以手工充值 ——
+// 所以刻意没有"总量/已用"两个数：充值后 remaining 可能大于初始值，那两个数会自相矛盾。
+// 前端只需要 remaining 加各项价格
+//
+// Enabled 的语义是"AI 总共能不能用"：服务端配了兜底 Key 后对所有人恒为 true
 type AIStatusResponse struct {
-	Enabled    bool `json:"enabled"`
-	DailyLimit int  `json:"dailyLimit"`
-	UsedToday  int  `json:"usedToday"`
-	Remaining  int  `json:"remaining"`
+	Enabled   bool                 `json:"enabled"`
+	Remaining int                  `json:"remaining"`
+	Costs     AIPointCostsResponse `json:"costs"`
+}
+
+// AIPointCostsResponse 各项功能的点数价格
+type AIPointCostsResponse struct {
+	Analysis        int `json:"analysis"`
+	OpponentProfile int `json:"opponentProfile"`
+	ProfileSummary  int `json:"profileSummary"`
+	Chat            int `json:"chat"`
 }
 
 // ToReviewAnalysisResponse 模型转响应

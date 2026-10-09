@@ -18,28 +18,58 @@ func TestAIConfigNilSafe(t *testing.T) {
 	withAppConfig(t, nil)
 
 	got := AIConfig()
-	if got.DailyLimit != defaultAIDailyLimit {
-		t.Errorf("DailyLimit = %d, 期望 %d", got.DailyLimit, defaultAIDailyLimit)
+	if got.PointLimit != DefaultAIPointLimit {
+		t.Errorf("PointLimit = %d, 期望 %d", got.PointLimit, DefaultAIPointLimit)
 	}
 }
 
 // TestAIConfigIgnoresNonPositive 非法（<=0）的值要退回默认，
-// 免得一个手滑的 0 让每日额度变成"一次都不许用"
+// 免得一个手滑的 0 让新用户的初始点数变成 0
 func TestAIConfigIgnoresNonPositive(t *testing.T) {
-	withAppConfig(t, &Config{AIDailyLimit: -1})
+	withAppConfig(t, &Config{AIPointLimit: -1})
 
 	got := AIConfig()
-	if got.DailyLimit != defaultAIDailyLimit {
-		t.Errorf("DailyLimit = %d, 期望退回默认 %d", got.DailyLimit, defaultAIDailyLimit)
+	if got.PointLimit != DefaultAIPointLimit {
+		t.Errorf("PointLimit = %d, 期望退回默认 %d", got.PointLimit, DefaultAIPointLimit)
 	}
 }
 
 func TestAIConfigReadsAppConfig(t *testing.T) {
-	withAppConfig(t, &Config{AIDailyLimit: 5})
+	withAppConfig(t, &Config{AIPointLimit: 30})
 
 	got := AIConfig()
-	if got.DailyLimit != 5 {
-		t.Errorf("AIConfig() = %+v, 期望 {5}", got)
+	if got.PointLimit != 30 {
+		t.Errorf("AIConfig() = %+v, 期望 {30}", got)
+	}
+}
+
+// TestAIServerConfigNilSafe 服务端凭据在 AppConfig 未初始化时要给出
+// "没有兜底"的语义（空 Key）+ 默认地址与模型，绝不能 panic
+func TestAIServerConfigNilSafe(t *testing.T) {
+	withAppConfig(t, nil)
+
+	got := AIServerConfig()
+	if got.APIKey != "" {
+		t.Errorf("APIKey = %q, 未配置时应当为空（表示没有服务端兜底）", got.APIKey)
+	}
+	if got.BaseURL != DefaultAIBaseURL || got.Model != DefaultAIModel {
+		t.Errorf("AIServerConfig() = %+v, 期望回退到默认地址与模型", got)
+	}
+}
+
+// TestAIServerConfigReadsEnv 服务端兜底凭据来自 AI_SERVER_*
+func TestAIServerConfigReadsEnv(t *testing.T) {
+	withAppConfig(t, &Config{
+		ServerAIAPIKey:  "sk-test",
+		ServerAIBaseURL: "https://server.example.com/v1",
+		ServerAIModel:   "server-model",
+	})
+
+	got := AIServerConfig()
+	if got.APIKey != "sk-test" ||
+		got.BaseURL != "https://server.example.com/v1" ||
+		got.Model != "server-model" {
+		t.Errorf("AIServerConfig() = %+v, 配置没有生效", got)
 	}
 }
 
