@@ -47,7 +47,12 @@ func (s *AIQuotaService) GetPoints(userID uint) (int, error) {
 //
 // 用户在认证中心侧创建，这里不做跨仓注册钩子 —— 行由第一次读或扣点补上
 func (s *AIQuotaService) ensureRow(userID uint) error {
-	return config.DB.Clauses(clause.OnConflict{DoNothing: true}).
+	return s.ensureRowTx(config.DB, userID)
+}
+
+// ensureRowTx 同 ensureRow，但在给定的连接或事务上执行
+func (s *AIQuotaService) ensureRowTx(db *gorm.DB, userID uint) error {
+	return db.Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&models.UserAIQuota{
 			UserID: userID,
 			Points: config.AIConfig().PointLimit,
@@ -59,15 +64,25 @@ func (s *AIQuotaService) ensureRow(userID uint) error {
 // 用一条**原子条件更新**（WHERE points >= cost）杜绝超支：两个并发请求不可能
 // 都成功。RowsAffected == 0 就说明余额不够 —— 这样点数永远不会变成负数
 func (s *AIQuotaService) DeductPoints(userID uint, cost int) error {
+	return s.DeductPointsTx(config.DB, userID, cost)
+}
+
+// DeductPointsTx 在给定的连接或事务上扣点，语义与 DeductPoints 完全一致。
+//
+// 存在的理由：扣点必须与「建分析行 / 置 pending」落在**同一个事务**里。
+// 拆成两次独立提交的话，两个并发请求会各自通过在途检查、各自扣点，再各自建行
+// 并各起一次模型调用 —— 双重扣费 + 双份推理成本（2026-10 修）。
+// 同事务还有个附带好处：任务没起来时事务回滚会连带撤销扣点，不必再显式退点
+func (s *AIQuotaService) DeductPointsTx(db *gorm.DB, userID uint, cost int) error {
 	if cost <= 0 {
 		return nil
 	}
 
-	if err := s.ensureRow(userID); err != nil {
+	if err := s.ensureRowTx(db, userID); err != nil {
 		return err
 	}
 
-	res := config.DB.Model(&models.UserAIQuota{}).
+	res := db.Model(&models.UserAIQuota{}).
 		Where("user_id = ? AND points >= ?", userID, cost).
 		UpdateColumn("points", gorm.Expr("points - ?", cost))
 	if res.Error != nil {

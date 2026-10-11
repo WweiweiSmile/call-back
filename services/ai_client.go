@@ -244,7 +244,9 @@ type streamOutcome struct {
 type errStreamOptionsUnsupported struct{ body string }
 
 func (e *errStreamOptionsUnsupported) Error() string {
-	return "供应商不支持 stream_options: " + shorten(e.body, 120)
+	// 不回显 body：这个 error 只在内部重试路径短暂出现，但万一重试也失败，
+	// 它会沿调用链落进 error_msg。原文留在 e.body 里供排查
+	return "供应商不支持 stream_options"
 }
 
 // CompleteJSON 调用模型并强制返回 JSON。
@@ -427,7 +429,11 @@ func (c *AIClient) streamOnce(
 			return nil, false, &errStreamOptionsUnsupported{body: string(raw)}
 		}
 
-		httpErr := fmt.Errorf("模型返回 %d: %s", resp.StatusCode, shorten(string(raw), 200))
+		// 响应体只进服务端日志，**不回显给用户**：供应商常在里面回显提交的 Key 片段、
+		// 账号或内部端点信息，而这条 error 会经 error_msg 落库并展示给终端用户。
+		// 上面 401/403 已单独脱敏，这里覆盖其余 4xx 与 5xx（2026-10 修）
+		log.Printf("[AI] 模型返回 %d: %s", resp.StatusCode, shorten(string(raw), 500))
+		httpErr := fmt.Errorf("模型服务返回错误（HTTP %d），请稍后重试；若持续失败请检查模型设置", resp.StatusCode)
 		// 4xx 里除了限流都是确定性错误，重试没意义
 		if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 			return nil, false, httpErr
@@ -502,7 +508,9 @@ func (c *AIClient) readStream(ctx context.Context, body io.Reader) (*streamOutco
 			continue
 		}
 		if chunk.Error != nil {
-			return nil, false, fmt.Errorf("模型返回错误: %s", chunk.Error.Message)
+			// 与状态码分支同一口径：错误原文只进日志，不把供应商报文回显给用户
+			log.Printf("[AI] 流式返回报错: %s", shorten(chunk.Error.Message, 500))
+			return nil, false, errors.New("模型服务在流式返回中报错，请稍后重试")
 		}
 		if chunk.Usage != nil {
 			out.tokensIn = chunk.Usage.PromptTokens

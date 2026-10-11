@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // 画像相关阈值与容量上限
@@ -578,37 +579,58 @@ func (s *ReviewMemoryService) StartSummaryRewrite(userID uint, charge bool) (*mo
 		return nil, false, err
 	}
 
-	// 已有一次在跑：不重复触发，把当前画像还回去让前端接着轮询。
-	// 手动点与"分析后自动触发"共用这一道闸，否则两条路径会同时重写
-	if inflight, err := s.summaryInflight(userID); err != nil {
-		return nil, false, err
-	} else if inflight {
-		return profile, true, nil
-	}
-
-	// 扣点放在所有"无事可做"的早返回**之后**：没有洞察可写、或已有一次在跑，
-	// 都没启动新的模型调用，不该扣
-	if charge {
-		if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostProfileSummary); err != nil {
-			if errors.Is(err, ErrInsufficientPoints) {
-				return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
-			}
-			return nil, false, err
-		}
-	}
-
+	// 在途检查、扣点、置 pending **必须在同一个事务里**，并在开头锁住这条画像行。
+	//
+	// 不锁的话是 check-then-act：两个并发触发（手动点 + 分析后自动重写最常撞）
+	// 都能判定"没有在途"，于是各扣一次点、各起一次总结调用 —— 双重扣费 +
+	// 双份推理成本（2026-10 修）。锁 review_profiles 那一行即可把同一用户的并发
+	// 重写串行化；这行一定存在，上面 refreshProfile 里的 GetOrCreateProfile 建的
+	//
+	// 事务只包 DB 段，绝不包模型调用
 	now := time.Now()
-	if err := config.DB.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
-		Updates(map[string]interface{}{
-			"summary_status":     models.SummaryStatusPending,
-			"summary_error":      "",
-			"summary_started_at": now,
-		}).Error; err != nil {
-		// 任务没起来，点退回去
-		if charge {
-			s.aiQuotaSvc.RefundPoints(userID, config.AICostProfileSummary)
+	var inflightHit bool
+	err = config.DB.Transaction(func(tx *gorm.DB) error {
+		var locked models.ReviewProfile
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ?", userID).First(&locked).Error; e != nil {
+			return e
 		}
-		return nil, false, fmt.Errorf("标记总结任务失败: %w", err)
+
+		// 已有一次在跑：不重复触发，把当前画像还回去让前端接着轮询。
+		// 手动点与"分析后自动触发"共用这一道闸，否则两条路径会同时重写
+		hit, e := s.summaryInflight(tx, userID)
+		if e != nil {
+			return e
+		}
+		if hit {
+			inflightHit = true
+			return nil
+		}
+
+		// 扣点放在所有"无事可做"的早返回**之后**：没有洞察可写、或已有一次在跑，
+		// 都没启动新的模型调用，不该扣。与置 pending 同事务：置失败会连带回滚扣点，
+		// 不必再显式退点
+		if charge {
+			if e := s.aiQuotaSvc.DeductPointsTx(tx, userID, config.AICostProfileSummary); e != nil {
+				return e
+			}
+		}
+
+		return tx.Model(&models.ReviewProfile{}).Where("user_id = ?", userID).
+			Updates(map[string]interface{}{
+				"summary_status":     models.SummaryStatusPending,
+				"summary_error":      "",
+				"summary_started_at": now,
+			}).Error
+	})
+	if err != nil {
+		if errors.Is(err, ErrInsufficientPoints) {
+			return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
+		}
+		return nil, false, fmt.Errorf("启动总结任务失败: %w", err)
+	}
+	if inflightHit {
+		return profile, true, nil
 	}
 
 	// 同步内存里的状态再返回：调用方（controller）会把这个结构体直接序列化给前端，
@@ -629,9 +651,11 @@ func (s *ReviewMemoryService) StartSummaryRewrite(userID uint, charge bool) (*mo
 //
 // 判据用 summary_started_at 而不是 UpdatedAt：GET /profile 每次都会重算统计并
 // Save，UpdatedAt 被用户刷一次就顶到当下，窗口永远不过期
-func (s *ReviewMemoryService) summaryInflight(userID uint) (bool, error) {
+// db 由调用方传入：StartSummaryRewrite 里这次检查必须与扣点、置 pending
+// 同处一个事务，并在事务开头锁住画像行，否则并发触发会各扣一次点、各起一次调用
+func (s *ReviewMemoryService) summaryInflight(db *gorm.DB, userID uint) (bool, error) {
 	var count int64
-	if err := config.DB.Model(&models.ReviewProfile{}).
+	if err := db.Model(&models.ReviewProfile{}).
 		Where("user_id = ? AND summary_status IN ? AND summary_started_at > ?",
 			userID,
 			[]string{models.SummaryStatusPending, models.SummaryStatusRunning},

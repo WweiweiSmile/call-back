@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -87,60 +88,93 @@ func (s *ReviewChatService) Ask(
 		return nil, nil, false, err
 	}
 
-	// 这次分析已有追问在跑：把那一对原样还回去，不要再起一次模型调用。
-	// 一次 K3 追问是几分钟和真金白银，重复提交不该并行烧两份
-	if pair, found, err := s.inflightPair(userID, analysisID, analysis.HandID); err != nil {
-		return nil, nil, false, err
-	} else if found {
-		return pair[0], pair[1], true, nil
-	}
+	// 在途检查、凭据解析、扣点、建两条行**必须在同一个事务里**，并在开头锁住
+	// 这次分析的行。
+	//
+	// 不锁的话这一段是 check-then-act：两个并发提交都能判定"没有在途"，于是各扣
+	// 1 点、各建一对消息、各起一次模型调用 —— 双重扣费 + 双份推理成本（2026-10 修）。
+	// 锁 review_analyses 那一行即可把同一次分析的并发串行化；同一手牌的两次分析
+	// 本就是不同 analysis，互不影响。
+	//
+	// 事务只包 DB 段，绝不包模型调用 —— 那次要跑几分钟，锁着会拖垮并发
+	var (
+		userMsg, assistantMsg *models.ReviewMessage
+		inflightMsgs          []*models.ReviewMessage
+		settings              *AICallSettings
+	)
+	err = config.DB.Transaction(func(tx *gorm.DB) error {
+		// 排他锁这次分析。它一定存在（上面 loadAnalysis 已取到）
+		var locked models.ReviewAnalysis
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ?", analysisID, userID).First(&locked).Error; e != nil {
+			return e
+		}
 
-	// 凭据解析排在在飞闸之后：命中闸时不该因为"模型配置坏了"就不给用户看
-	// 那条已经在跑的记录 —— 它跟配置没关系
-	settings, err := s.aiSettingSvc.ResolveCallSettings(userID)
+		// 这次分析已有追问在跑：把那一对原样还回去，不要再起一次模型调用。
+		// 一次 K3 追问是几分钟和真金白银，重复提交不该并行烧两份
+		if pair, found, e := s.inflightPair(tx, userID, analysisID, analysis.HandID); e != nil {
+			return e
+		} else if found {
+			inflightMsgs = pair
+			return nil
+		}
+
+		// 凭据解析排在在飞闸之后：命中闸时不该因为"模型配置坏了"就不给用户看
+		// 那条已经在跑的记录 —— 它跟配置没关系。
+		// 它只读 user_preferences（与本次锁住的 review_analyses 无关），
+		// 所以这里即使另开连接查询也不会与这把锁冲突
+		st, e := s.aiSettingSvc.ResolveCallSettings(userID)
+		if e != nil {
+			return e
+		}
+
+		// 扣点同样排在早返回之后：命中在飞闸时返回的是已有那条，没起新调用。
+		// 一轮追问 1 点。与建行同事务：建行失败会连带把扣点回滚，不必再显式退点
+		if e := s.aiQuotaSvc.DeductPointsTx(tx, userID, config.AICostChat); e != nil {
+			return e
+		}
+
+		userMsg = &models.ReviewMessage{
+			UserID: userID,
+			// HandID 保留写入：对话按 AnalysisID 绑定，但手牌是溯源与按手牌清理的依据
+			HandID:     analysis.HandID,
+			AnalysisID: analysis.ID,
+			Role:       models.MessageRoleUser,
+			Content:    question,
+			// 显式赋值，不依赖 default tag：GORM 不回读数据库填的默认值，
+			// 留空的话前端会把它当成非终态，输入框直接禁掉
+			Status: models.MessageStatusDone,
+		}
+		assistantMsg = &models.ReviewMessage{
+			UserID:     userID,
+			HandID:     analysis.HandID,
+			AnalysisID: analysis.ID,
+			Role:       models.MessageRoleAssistant,
+			Content:    "",
+			Status:     models.MessageStatusPending,
+		}
+
+		// 两条一起写：占位行与问题必须同时存在，否则前端会看到一轮没有提问的回答
+		if e := tx.Create(userMsg).Error; e != nil {
+			return e
+		}
+		if e := tx.Create(assistantMsg).Error; e != nil {
+			return e
+		}
+
+		settings = st
+		return nil
+	})
 	if err != nil {
-		return nil, nil, false, err
-	}
-
-	// 扣点同样排在两道早返回之后：命中在飞闸时返回的是已有那条，没起新调用。
-	// 一轮追问 1 点
-	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostChat); err != nil {
 		if errors.Is(err, ErrInsufficientPoints) {
 			return nil, nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
 		}
 		return nil, nil, false, err
 	}
 
-	userMsg := &models.ReviewMessage{
-		UserID: userID,
-		// HandID 保留写入：对话按 AnalysisID 绑定，但手牌是溯源与按手牌清理的依据
-		HandID:     analysis.HandID,
-		AnalysisID: analysis.ID,
-		Role:       models.MessageRoleUser,
-		Content:    question,
-		// 显式赋值，不依赖 default tag：GORM 不回读数据库填的默认值，
-		// 留空的话前端会把它当成非终态，输入框直接禁掉
-		Status: models.MessageStatusDone,
-	}
-	assistantMsg := &models.ReviewMessage{
-		UserID:     userID,
-		HandID:     analysis.HandID,
-		AnalysisID: analysis.ID,
-		Role:       models.MessageRoleAssistant,
-		Content:    "",
-		Status:     models.MessageStatusPending,
-	}
-
-	// 两条一起写：占位行与问题必须同时存在，否则前端会看到一轮没有提问的回答
-	if err := config.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(userMsg).Error; err != nil {
-			return err
-		}
-		return tx.Create(assistantMsg).Error
-	}); err != nil {
-		// 一条都没写进去，模型也不会被调用 —— 点退回去
-		s.aiQuotaSvc.RefundPoints(userID, config.AICostChat)
-		return nil, nil, false, fmt.Errorf("保存对话失败: %w", err)
+	// 命中在途闸：返回已存在的那一对，没有新建、也没有新扣点
+	if inflightMsgs != nil {
+		return inflightMsgs[0], inflightMsgs[1], true, nil
 	}
 
 	// 值拷贝传进后台：HTTP 响应正在读这两条序列化返回，后台同时改它们就是数据竞争
@@ -288,9 +322,12 @@ func (s *ReviewChatService) reapStuckMessages(userID, analysisID uint) {
 // 一起没了，那条记录会永远停在 running。无条件认它，这次分析就再也问不了了
 //
 // handID 只用来补全下面构造的兜底问题行，不参与过滤
-func (s *ReviewChatService) inflightPair(userID, analysisID, handID uint) ([]*models.ReviewMessage, bool, error) {
+//
+// db 由调用方传入：Ask 里这次检查必须与扣点、建行同处一个事务，
+// 并在事务开头锁住 analysis 行，否则并发提交会各建一对、各烧一次模型
+func (s *ReviewChatService) inflightPair(db *gorm.DB, userID, analysisID, handID uint) ([]*models.ReviewMessage, bool, error) {
 	var assistant models.ReviewMessage
-	err := config.DB.Where(
+	err := db.Where(
 		"user_id = ? AND analysis_id = ? AND role = ? AND status IN ? AND created_at > ?",
 		userID, analysisID, models.MessageRoleAssistant,
 		[]string{models.MessageStatusPending, models.MessageStatusRunning},
@@ -306,7 +343,7 @@ func (s *ReviewChatService) inflightPair(userID, analysisID, handID uint) ([]*mo
 
 	// 配对的问题行：占位行的 id 一定大于它对应的那一问
 	var question models.ReviewMessage
-	if err := config.DB.Where("user_id = ? AND analysis_id = ? AND role = ? AND id < ?",
+	if err := db.Where("user_id = ? AND analysis_id = ? AND role = ? AND id < ?",
 		userID, analysisID, models.MessageRoleUser, assistant.ID).
 		Order("id DESC").First(&question).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {

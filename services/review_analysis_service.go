@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // analysisInflightWindow 「这条分析还算在跑」的时间窗。
@@ -106,71 +107,106 @@ func (s *ReviewAnalysisService) RequestAnalysis(userID, handID uint) (*models.Re
 		return nil, false, err
 	}
 
-	// 内容没变就复用上次成功的结果
-	var reused models.ReviewAnalysis
-	err = config.DB.Where("hand_id = ? AND user_id = ? AND content_hash = ? AND status = ?",
-		handID, userID, hand.ContentHash, models.AnalysisStatusDone).
-		Order("id DESC").First(&reused).Error
-	if err == nil {
-		// 复用不消耗额度：本来就没调用模型
-		s.ensureMemoryRecorded(&reused, hand)
-		return &reused, true, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, err
-	}
-
-	// 同一手牌已有分析在跑：把那条原样还给调用方，不要再起一次模型调用。
-	// 前端拿到 status=running 会继续轮询，用户看到的就是"还在分析中"。
+	// 查复用、查在途、扣点、建行**必须在同一个事务里**，并在开头锁住这手牌的行。
 	//
-	// 这是"不限时"之后必须补的一道闸：一次 K3 分析要十几分钟，用户等急了
-	// 再点一次，原来会并行烧两份推理 token、扣两次额度
+	// 不锁的话这一段是 check-then-act：两个并发请求都能判定"没有在途"，于是各扣
+	// 一次点、各建一行、各起一次模型调用 —— 双重扣费 + 双份推理成本（2026-10 修）。
+	// 锁 review_hands 那一行就能把同一手牌的并发串行化：后到的请求会阻塞到前一个
+	// 提交，然后看到它建的 pending 行，走下面的"在途复用"分支。
 	//
-	// 认 running/pending 但**加时间窗**：分析跑到一半重启服务，后台 goroutine
-	// 随进程一起没了，那条记录会永远停在 running（没有任何东西会去改它）。
-	// 无条件认它，这手牌就再也分析不了了 —— 而重启恰恰是调试期最常做的事。
-	// 超出窗口的当作中断残留，放行新的分析
-	var inflight models.ReviewAnalysis
-	err = config.DB.Where("hand_id = ? AND user_id = ? AND status IN ? AND created_at > ?",
-		handID, userID,
-		[]string{models.AnalysisStatusPending, models.AnalysisStatusRunning},
-		time.Now().Add(-analysisInflightWindow)).
-		Order("id DESC").First(&inflight).Error
-	if err == nil {
-		return &inflight, true, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, err
-	}
+	// 事务只包 DB 段，绝不包模型调用 —— 那次要跑几分钟，锁着会拖垮并发
+	var (
+		analysis     *models.ReviewAnalysis
+		reused       bool
+		contentReuse bool // true = 内容指纹复用（要补写记忆）；false = 在途复用
+	)
+	err = config.DB.Transaction(func(tx *gorm.DB) error {
+		// 排他锁这手牌。必须用 FOR UPDATE 而不是普通读：普通读锁不住并发。
+		// 手牌一定存在（上面 GetHand 已取到），这里取锁的同时顺带做了归属校验
+		var locked models.ReviewHand
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ?", handID, userID).First(&locked).Error; e != nil {
+			return e
+		}
 
-	// 扣点放在**缓存复用与在途检查之后**：复用不花钱，不该被额度挡掉。
-	// DeductPoints 是原子的条件更新（points >= cost），并发点两次也不会超支
-	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostAnalysis); err != nil {
+		// 内容没变就复用上次成功的结果
+		var hit models.ReviewAnalysis
+		e := tx.Where("hand_id = ? AND user_id = ? AND content_hash = ? AND status = ?",
+			handID, userID, hand.ContentHash, models.AnalysisStatusDone).
+			Order("id DESC").First(&hit).Error
+		if e == nil {
+			analysis, reused, contentReuse = &hit, true, true
+			return nil
+		}
+		if !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+
+		// 同一手牌已有分析在跑：把那条原样还给调用方，不要再起一次模型调用。
+		// 前端拿到 status=running 会继续轮询，用户看到的就是"还在分析中"。
+		//
+		// 认 running/pending 但**加时间窗**：分析跑到一半重启服务，后台 goroutine
+		// 随进程一起没了，那条记录会永远停在 running（没有任何东西会去改它）。
+		// 无条件认它，这手牌就再也分析不了了 —— 而重启恰恰是调试期最常做的事。
+		// 超出窗口的当作中断残留，放行新的分析
+		var inflight models.ReviewAnalysis
+		e = tx.Where("hand_id = ? AND user_id = ? AND status IN ? AND created_at > ?",
+			handID, userID,
+			[]string{models.AnalysisStatusPending, models.AnalysisStatusRunning},
+			time.Now().Add(-analysisInflightWindow)).
+			Order("id DESC").First(&inflight).Error
+		if e == nil {
+			analysis, reused, contentReuse = &inflight, true, false
+			return nil
+		}
+		if !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+
+		// 扣点放在**缓存复用与在途检查之后**：复用不花钱，不该被额度挡掉。
+		// 与建行同事务：建行失败会连带把扣点回滚，不必再显式退点
+		if e := s.aiQuotaSvc.DeductPointsTx(tx, userID, config.AICostAnalysis); e != nil {
+			return e
+		}
+
+		a := &models.ReviewAnalysis{
+			HandID: handID,
+			UserID: userID,
+			Status: models.AnalysisStatusPending,
+			Model:  settings.Model,
+			// 按这手牌报版本：爆炸底池的手牌块与常规手牌不同（见 models.PromptVersionFor）
+			PromptVersion: models.PromptVersionFor(hand),
+			ContentHash:   hand.ContentHash,
+		}
+		if e := tx.Create(a).Error; e != nil {
+			return e
+		}
+
+		// 同步更新手牌上的冗余状态，列表页据此显示角标
+		if e := tx.Model(&models.ReviewHand{}).Where("id = ?", handID).
+			Update("analyze_status", models.AnalyzeStatusPending).Error; e != nil {
+			return e
+		}
+
+		analysis, reused, contentReuse = a, false, false
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, ErrInsufficientPoints) {
 			return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
 		}
 		return nil, false, err
 	}
 
-	analysis := &models.ReviewAnalysis{
-		HandID: handID,
-		UserID: userID,
-		Status: models.AnalysisStatusPending,
-		Model:  settings.Model,
-		// 按这手牌报版本：爆炸底池的手牌块与常规手牌不同（见 models.PromptVersionFor）
-		PromptVersion: models.PromptVersionFor(hand),
-		ContentHash:   hand.ContentHash,
+	if reused {
+		// 内容指纹复用要补写一次记忆（在途复用不用，那条跑完时自己会写）：
+		// 手牌编辑会清掉洞察，"改了又改回来"之后指纹又对上、直接复用旧分析，
+		// 不补这一次这手牌会永久从画像里消失。复用不消耗额度：本来就没调用模型
+		if contentReuse {
+			s.ensureMemoryRecorded(analysis, hand)
+		}
+		return analysis, true, nil
 	}
-
-	if err := config.DB.Create(analysis).Error; err != nil {
-		// 记录都没建起来，分析根本没跑 —— 点退回去
-		s.aiQuotaSvc.RefundPoints(userID, config.AICostAnalysis)
-		return nil, false, err
-	}
-
-	// 同步更新手牌上的冗余状态，列表页据此显示角标
-	config.DB.Model(&models.ReviewHand{}).Where("id = ?", handID).
-		Update("analyze_status", models.AnalyzeStatusPending)
 
 	// 传给后台的必须是副本：HTTP 响应正在读 analysis 序列化返回，
 	// 后台同时改它的字段就是数据竞争。副本是值拷贝，两边互不影响。
@@ -199,11 +235,20 @@ func (s *ReviewAnalysisService) runAnalysis(
 	start := time.Now()
 	analysisID, handID, userID := analysis.ID, hand.ID, analysis.UserID
 
+	// succeeded 只在**整条分析真的落库成功**时置位，其余所有返回路径都算没产出。
+	//
+	// 与追问的 answer 同一套（见 ReviewChatService.answer）：没有这个标志的话，
+	// Save 成功之后、函数返回之前若发生 panic，recover 会把一条已经写好的结论
+	// 改成 failed 并退点 —— 而内容指纹复用只认 done，用户再也取不回这条已付费的结果
+	succeeded := false
+
 	// 单独兜一层 recover：后台 goroutine 里 panic 会直接带走整个进程
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[分析 %d] panic: %v", analysisID, r)
-			s.failAnalysis(userID, analysisID, handID, fmt.Sprintf("内部错误: %v", r), time.Since(start))
+			if !succeeded {
+				s.failAnalysis(userID, analysisID, handID, fmt.Sprintf("内部错误: %v", r), time.Since(start))
+			}
 		}
 	}()
 
@@ -259,6 +304,8 @@ func (s *ReviewAnalysisService) runAnalysis(
 		s.failAnalysis(userID, analysisID, handID, "保存分析结果失败: "+err.Error(), time.Since(start))
 		return
 	}
+	// 结论已经落库，之后任何一步出问题都不该把这条判失败（见函数头的 succeeded 说明）
+	succeeded = true
 
 	// 结果写成功了才把状态同步到 done。
 	// 顺序反过来的话，一旦写库失败就会出现"手牌显示已分析、但没有任何结论"的不一致

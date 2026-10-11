@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // opponentProfileInflightWindow 一条 pending/running 超过它就当作中断残留，放行新任务。
@@ -93,31 +94,59 @@ func (s *OpponentProfileService) StartGeneration(userID, opponentID uint) (*mode
 		return nil, false, err
 	}
 
-	if inflight, err := s.profileInflight(userID, opponentID); err != nil {
-		return nil, false, err
-	} else if inflight {
-		current, err := s.GetProfile(userID, opponentID)
-		if err != nil {
-			return nil, false, err
+	// 在途检查、扣点、置 pending **必须在同一个事务里**，并在开头锁住这位对手的行。
+	//
+	// 不锁的话是 check-then-act：两个并发触发都能判定"没有在途"，于是各扣一次点、
+	// 各起一次生成调用 —— 双重扣费 + 双份推理成本（2026-10 修）。锁 opponents
+	// 那一行即可把同一对手的并发生成串行化；这行一定存在（上面 GetOpponent 取到了）
+	//
+	// 事务只包 DB 段，绝不包模型调用
+	now := time.Now()
+	var (
+		profile     *models.OpponentProfile
+		inflightHit bool
+	)
+	err = config.DB.Transaction(func(tx *gorm.DB) error {
+		var locked models.Opponent
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ?", opponentID, userID).First(&locked).Error; e != nil {
+			return e
 		}
-		return current, true, nil
-	}
 
-	// 扣点放在"有手牌""已配模型""在途"三道早返回**之后**：前面任一条过不了，
-	// 用户该看到的是那条原因，而不是"点数不足"；也没启动模型调用，不该扣
-	if err := s.aiQuotaSvc.DeductPoints(userID, config.AICostOpponentProfile); err != nil {
+		if hit, e := s.profileInflight(tx, userID, opponentID); e != nil {
+			return e
+		} else if hit {
+			inflightHit = true
+			return nil
+		}
+
+		// 扣点放在"有手牌""已配模型""在途"三道早返回**之后**：前面任一条过不了，
+		// 用户该看到的是那条原因，而不是"点数不足"；也没启动模型调用，不该扣。
+		// 与置 pending 同事务：置失败会连带回滚扣点，不必再显式退点
+		if e := s.aiQuotaSvc.DeductPointsTx(tx, userID, config.AICostOpponentProfile); e != nil {
+			return e
+		}
+
+		p, e := s.upsertPending(tx, userID, opponentID, now)
+		if e != nil {
+			return e
+		}
+		profile = p
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, ErrInsufficientPoints) {
 			return nil, false, errors.New("AI 点数不足，需要更多点数请联系管理员")
 		}
 		return nil, false, err
 	}
-
-	now := time.Now()
-	profile, err := s.upsertPending(userID, opponentID, now)
-	if err != nil {
-		// 任务没起来，点退回去
-		s.aiQuotaSvc.RefundPoints(userID, config.AICostOpponentProfile)
-		return nil, false, err
+	if inflightHit {
+		// 命中在途闸：把当前画像还回去，前端继续轮询即可
+		current, e := s.GetProfile(userID, opponentID)
+		if e != nil {
+			return nil, false, e
+		}
+		return current, true, nil
 	}
 
 	// 值拷贝传进后台：HTTP 响应正在读这个结构体序列化返回
@@ -132,9 +161,9 @@ func (s *OpponentProfileService) StartGeneration(userID, opponentID uint) (*mode
 //
 // 只更新标量列，不动 tendencies / summary 这些正文：重新生成期间页面要继续
 // 显示上一版内容 + 一个"生成中"的角标，把正文清空会让页面闪一下白
-func (s *OpponentProfileService) upsertPending(userID, opponentID uint, now time.Time) (*models.OpponentProfile, error) {
+func (s *OpponentProfileService) upsertPending(db *gorm.DB, userID, opponentID uint, now time.Time) (*models.OpponentProfile, error) {
 	var profile models.OpponentProfile
-	err := config.DB.Where("user_id = ? AND opponent_id = ?", userID, opponentID).First(&profile).Error
+	err := db.Where("user_id = ? AND opponent_id = ?", userID, opponentID).First(&profile).Error
 	isNew := errors.Is(err, gorm.ErrRecordNotFound)
 	if err != nil && !isNew {
 		return nil, err
@@ -151,12 +180,12 @@ func (s *OpponentProfileService) upsertPending(userID, opponentID uint, now time
 	profile.StartedAt = &now
 
 	if isNew {
-		if err := config.DB.Create(&profile).Error; err != nil {
+		if err := db.Create(&profile).Error; err != nil {
 			return nil, fmt.Errorf("创建画像失败: %w", err)
 		}
 		return &profile, nil
 	}
-	if err := config.DB.Model(&models.OpponentProfile{}).
+	if err := db.Model(&models.OpponentProfile{}).
 		Where("user_id = ? AND opponent_id = ?", userID, opponentID).
 		Updates(map[string]interface{}{
 			"status":     models.SummaryStatusPending,
@@ -172,9 +201,11 @@ func (s *OpponentProfileService) upsertPending(userID, opponentID uint, now time
 //
 // 判据用 started_at 而不是 updated_at：任何一次写库都会把 updated_at 顶到当下，
 // 窗口就永远不过期了（ReviewProfile 那边踩过同一个坑）
-func (s *OpponentProfileService) profileInflight(userID, opponentID uint) (bool, error) {
+// db 由调用方传入：StartGeneration 里这次检查必须与扣点、置 pending 同处一个
+// 事务，并在事务开头锁住对手行，否则并发触发会各扣一次点、各起一次生成调用
+func (s *OpponentProfileService) profileInflight(db *gorm.DB, userID, opponentID uint) (bool, error) {
 	var count int64
-	err := config.DB.Model(&models.OpponentProfile{}).
+	err := db.Model(&models.OpponentProfile{}).
 		Where("user_id = ? AND opponent_id = ? AND status IN ? AND started_at > ?",
 			userID, opponentID,
 			[]string{models.SummaryStatusPending, models.SummaryStatusRunning},
