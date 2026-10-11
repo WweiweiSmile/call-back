@@ -5,6 +5,7 @@ import (
 	"call-go/middleware"
 	"call-go/models"
 	"call-go/services"
+	"call-go/telemetry"
 	"net/http"
 	"strconv"
 
@@ -229,10 +230,14 @@ func (c *ReviewController) GenerateOpponentProfile(ctx *gin.Context) {
 		return
 	}
 
-	profile, _, err := c.profileSvc.StartGeneration(userID, uint(opponentID))
+	// 第二个返回值 = "没有新建任务"（命中在途闸，返回的是已有那条）
+	profile, noNewTask, err := c.profileSvc.StartGeneration(userID, uint(opponentID))
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return
+	}
+	if !noNewTask {
+		telemetry.RecordAICall(ctx, userID, telemetry.KindOpponentProfile)
 	}
 
 	c.respondOpponentProfile(ctx, userID, uint(opponentID), profile)
@@ -312,6 +317,11 @@ func (c *ReviewController) AnalyzeHand(ctx *gin.Context) {
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return
+	}
+
+	// 只有真的发起了一次模型调用才记。复用已有结论既没扣点也没调用模型
+	if !reused {
+		telemetry.RecordAICall(ctx, userID, telemetry.KindAnalysis)
 	}
 
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.RequestAnalysisResponse{
@@ -441,6 +451,13 @@ func (c *ReviewController) RefreshProfileSummary(ctx *gin.Context) {
 		return
 	}
 
+	// 只有真的排上了任务才记：没有洞察可写、或已有一次在跑，都不扣点也没调用模型。
+	// 服务返回的那个 bool 区分不了这两种"没排上"（都返回 false），所以改判状态 ——
+	// 排上时它一定被置成 pending
+	if profile.SummaryStatus == models.SummaryStatusPending {
+		telemetry.RecordAICall(ctx, userID, telemetry.KindProfileSummary)
+	}
+
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.ToReviewProfileResponse(profile)))
 }
 
@@ -513,6 +530,11 @@ func (c *ReviewController) AskQuestion(ctx *gin.Context) {
 		// service 返回的文案已经是给用户看的
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error()))
 		return
+	}
+
+	// 命中在途闸时返回的是上一轮那一对，没有新的模型调用
+	if !inflight {
+		telemetry.RecordAICall(ctx, userID, telemetry.KindChat)
 	}
 
 	ctx.JSON(http.StatusOK, dto.SuccessResponse(dto.AskReviewMessageResponse{

@@ -60,6 +60,7 @@ func main() {
 		&models.ReviewTagSuggestion{},
 		&models.UserPreference{},
 		&models.UserAIQuota{},
+		&models.TelemetryEvent{},
 		&models.Opponent{},
 		&models.OpponentProfile{},
 	); err != nil {
@@ -78,6 +79,12 @@ func main() {
 
 	// 设置 Gin
 	r := gin.Default()
+
+	// 只信任配置里的反向代理。**不设的话 Gin 默认信任所有代理**，会直接采信
+	// 客户端发来的 X-Forwarded-For —— 那是可伪造的（埋点里的 IP 会失真）
+	if err := r.SetTrustedProxies(config.AppConfig.TrustedProxies); err != nil {
+		log.Fatalf("TRUSTED_PROXIES 配置有误: %v", err)
+	}
 
 	// 使用 CORS 中间件（必须在路由之前）
 	r.Use(middleware.CORSMiddleware())

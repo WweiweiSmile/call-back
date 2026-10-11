@@ -19,6 +19,19 @@ type Config struct {
 	DBName     string
 	ServerPort string
 
+	// TrustedProxies 可信反向代理的地址或 CIDR，逗号分隔（TRUSTED_PROXIES）。
+	//
+	// 只有**来自这些地址**的请求，Gin 才会采信 X-Forwarded-For / X-Real-IP；
+	// 否则它退回 TCP 对端地址（内核给的，不可伪造）。
+	//
+	// 不配的话 Gin 默认信任**所有**代理，会直接采信客户端发来的 XFF —— 那是
+	// 可伪造的，埋点里的 IP 会失真。默认值只信任本机（覆盖"nginx 与后端同机"
+	// 这个最常见的形态），而外部客户端不可能伪装成 127.0.0.1，所以默认是安全的。
+	//
+	// 跨机反代（独立 LB）要设成代理的内网地址；设成**空串**表示一个都不信任，
+	// 那时 IP 一律取 TCP 对端
+	TrustedProxies []string
+
 	// ---------- 认证 ----------
 	// 本服务**只验签、不签发**：签发权归认证中心 call-auth。所以这里不再需要
 	// 任何密钥 —— 只有公钥地址。好处是新增服务不用分发密钥，任何一个服务被攻破
@@ -82,12 +95,13 @@ func LoadConfig() error {
 	apiKey := GetEnv("DEEPSEEK_API_KEY", "")
 
 	AppConfig = &Config{
-		DBHost:     GetEnv("DB_HOST", "localhost"),
-		DBPort:     GetEnv("DB_PORT", "3306"),
-		DBUser:     GetEnv("DB_USER", "root"),
-		DBPassword: GetEnv("DB_PASSWORD", ""),
-		DBName:     GetEnv("DB_NAME", "call_game"),
-		ServerPort: GetEnv("SERVER_PORT", "8080"),
+		DBHost:         GetEnv("DB_HOST", "localhost"),
+		DBPort:         GetEnv("DB_PORT", "3306"),
+		DBUser:         GetEnv("DB_USER", "root"),
+		DBPassword:     GetEnv("DB_PASSWORD", ""),
+		DBName:         GetEnv("DB_NAME", "call_game"),
+		ServerPort:     GetEnv("SERVER_PORT", "8080"),
+		TrustedProxies: resolveTrustedProxies(),
 		// 默认指向本机的认证中心。这不是密钥，给默认值没有安全风险 ——
 		// 而且验签本身会失败得很明显（拉不到公钥就启动不了），不会静默降级
 		AuthJWKSURL:   GetEnv("AUTH_JWKS_URL", "http://localhost:8020/.well-known/jwks.json"),
@@ -126,6 +140,19 @@ func LoadConfig() error {
 	// 掐断等于把已经烧掉的推理 token 白白扔掉）。留着这行会让运维误以为它还能调
 	if GetEnv("AI_TIMEOUT_SECONDS", "") != "" {
 		log.Println("Warning: AI_TIMEOUT_SECONDS 已废弃，AI 调用不再设超时，这行可以从 .env 里删掉")
+	}
+
+	// 可信代理是"埋点里的 IP 准不准"的唯一开关，启动时必须能一眼看到当前值
+	if len(AppConfig.TrustedProxies) == 0 {
+		log.Println("可信反向代理：无（TRUSTED_PROXIES 为空）—— 客户端 IP 一律取 TCP 对端，不采信任何代理头")
+	} else {
+		log.Printf("可信反向代理：%v（TRUSTED_PROXIES）", AppConfig.TrustedProxies)
+	}
+	for _, p := range AppConfig.TrustedProxies {
+		if p == "0.0.0.0/0" || p == "::/0" {
+			log.Println("Warning: TRUSTED_PROXIES 里出现了 0.0.0.0/0 或 ::/0 —— 那等于信任所有代理，" +
+				"客户端可伪造 X-Forwarded-For 冒充任意 IP，埋点里的 IP 会失真")
+		}
 	}
 
 	log.Println("Config loaded successfully")
@@ -178,6 +205,38 @@ func locateEnvFile() (string, []string, error) {
 		}
 	}
 	return "", candidates, nil
+}
+
+// defaultTrustedProxies 默认只信任本机。
+//
+// 它覆盖"nginx 与后端同机"这个最常见的部署形态，且是**安全的**：
+// 外部客户端不可能让自己看起来来自 127.0.0.1。
+// 反过来，Gin 自带的默认值是 0.0.0.0/0（信任一切），那是可伪造的
+const defaultTrustedProxies = "127.0.0.1,::1"
+
+// resolveTrustedProxies 读 TRUSTED_PROXIES。
+//
+// 刻意**不走 GetEnv**：它把"设成空串"当成"没设"，于是退回默认值 ——
+// 而这里空串是有意义的：「一个代理都不信任」。所以用 LookupEnv 区分
+// "没设"与"设成空"
+func resolveTrustedProxies() []string {
+	raw, ok := os.LookupEnv("TRUSTED_PROXIES")
+	if !ok {
+		return splitCSV(defaultTrustedProxies)
+	}
+	// 显式设成空串 → 返回 nil → Gin 谁都不信，IP 一律取 TCP 对端
+	return splitCSV(raw)
+}
+
+// splitCSV 逗号分隔 → 切片，忽略空白与空项。空串得到 nil
+func splitCSV(s string) []string {
+	var out []string
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func GetEnv(key string, defaultValue string) string {
