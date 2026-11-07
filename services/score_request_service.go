@@ -6,6 +6,7 @@ import (
 	"call-go/models"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,13 +47,26 @@ func (s *ScoreRequestService) Create(userID uint, req *dto.CreateScoreRequestReq
 	// 注意：取分不校验余额是否充足——本业务的余额允许为负，
 	// 参与者可以取走超过已存入的分数（这正是"不平衡"的来源）。
 
+	// 筹码明细要能对上金额，否则审核人看到的明细和申请分数互相矛盾
+	chipCounts := models.ChipCounts(req.ChipCounts)
+	if len(chipCounts) > 0 {
+		total, err := chipCountsTotal(chipCounts)
+		if err != nil {
+			return nil, err
+		}
+		if total != req.Amount {
+			return nil, fmt.Errorf("筹码明细合计 %d 分，与申请分数 %d 分不一致", total, req.Amount)
+		}
+	}
+
 	request := &models.ScoreRequest{
-		GameID: req.GameID,
-		UserID: userID,
-		Type:   req.Type,
-		Amount: req.Amount,
-		Remark: req.Remark,
-		Status: models.ScoreReqStatusPending,
+		GameID:     req.GameID,
+		UserID:     userID,
+		Type:       req.Type,
+		Amount:     req.Amount,
+		Remark:     req.Remark,
+		ChipCounts: chipCounts,
+		Status:     models.ScoreReqStatusPending,
 	}
 
 	applicantName := displayNameOf(config.DB, userID)
@@ -73,6 +87,23 @@ func (s *ScoreRequestService) Create(userID uint, req *dto.CreateScoreRequestReq
 
 	responses := s.fillResponses([]models.ScoreRequest{*request})
 	return &responses[0], nil
+}
+
+// chipCountsTotal 合计筹码明细的分数。
+// 面值或个数非法时直接报错：静默忽略会让明细与金额对不上却照样入库。
+func chipCountsTotal(counts models.ChipCounts) (int64, error) {
+	var total int64
+	for rawValue, count := range counts {
+		value, err := strconv.ParseInt(rawValue, 10, 64)
+		if err != nil || value <= 0 {
+			return 0, fmt.Errorf("筹码面值非法: %q", rawValue)
+		}
+		if count <= 0 {
+			return 0, errors.New("筹码个数必须大于 0")
+		}
+		total += value * count
+	}
+	return total, nil
 }
 
 // GetList 申请列表。scope=mine 只能看自己的；scope=review 只能是场次创建者
@@ -290,6 +321,7 @@ func (s *ScoreRequestService) fillResponses(requests []models.ScoreRequest) []dt
 			UserName:      userMap[r.UserID],
 			Type:          r.Type,
 			Amount:        r.Amount,
+			ChipCounts:    map[string]int64(r.ChipCounts),
 			Remark:        r.Remark,
 			Status:        r.Status,
 			ReviewerID:    r.ReviewerID,

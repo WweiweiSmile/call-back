@@ -8,7 +8,10 @@ type CreateScoreRequestRequest struct {
 	GameID uint   `json:"gameId" binding:"required"`
 	Type   string `json:"type" binding:"required,oneof=deposit withdraw"`
 	Amount int64  `json:"amount" binding:"required,min=1"`
-	Remark string `json:"remark"`
+	// ChipCounts 筹码明细：面值 -> 个数，只传个数 > 0 的面值。
+	// 有明细时后端会校验合计等于 Amount；取分/老客户端不传
+	ChipCounts map[string]int64 `json:"chipCounts"`
+	Remark     string           `json:"remark"`
 }
 
 // ReviewScoreRequestRequest 审核申请（通过/驳回）
@@ -18,21 +21,22 @@ type ReviewScoreRequestRequest struct {
 
 // ScoreRequestResponse 申请单响应
 type ScoreRequestResponse struct {
-	ID            uint       `json:"id"`
-	GameID        uint       `json:"gameId"`
-	GameName      string     `json:"gameName,omitempty"`
-	UserID        uint       `json:"userId"`
-	UserName      string     `json:"userName,omitempty"`
-	Type          string     `json:"type"`
-	Amount        int64      `json:"amount"`
-	Remark        string     `json:"remark"`
-	Status        string     `json:"status"`
-	ReviewerID    *uint      `json:"reviewerId,omitempty"`
-	ReviewerName  string     `json:"reviewerName,omitempty"`
-	ReviewRemark  string     `json:"reviewRemark"`
-	ReviewedAt    *time.Time `json:"reviewedAt,omitempty"`
-	TransactionID *uint      `json:"transactionId,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
+	ID            uint             `json:"id"`
+	GameID        uint             `json:"gameId"`
+	GameName      string           `json:"gameName,omitempty"`
+	UserID        uint             `json:"userId"`
+	UserName      string           `json:"userName,omitempty"`
+	Type          string           `json:"type"`
+	Amount        int64            `json:"amount"`
+	ChipCounts    map[string]int64 `json:"chipCounts,omitempty"`
+	Remark        string           `json:"remark"`
+	Status        string           `json:"status"`
+	ReviewerID    *uint            `json:"reviewerId,omitempty"`
+	ReviewerName  string           `json:"reviewerName,omitempty"`
+	ReviewRemark  string           `json:"reviewRemark"`
+	ReviewedAt    *time.Time       `json:"reviewedAt,omitempty"`
+	TransactionID *uint            `json:"transactionId,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
 }
 
 // ScoreRequestListResponse 申请单列表响应

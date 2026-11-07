@@ -20,6 +20,10 @@ const (
 	ScoreReqStatusCancelled = "cancelled" // 已撤销
 )
 
+// ChipCounts 筹码明细：面值 -> 个数。
+// 只存个数 > 0 的面值；空值表示这单没走筹码录入（取分申请、老数据）。
+type ChipCounts map[string]int64
+
 // ScoreRequest 存取分申请表
 // 普通参与者发起，场次创建者审核，通过后才真正变更余额
 type ScoreRequest struct {
@@ -29,6 +33,7 @@ type ScoreRequest struct {
 	Type          string         `json:"type" gorm:"size:20;not null;comment:申请类型: deposit-存分, withdraw-取分"`
 	Amount        int64          `json:"amount" gorm:"not null;comment:申请数量"`
 	Remark        string         `json:"remark" gorm:"type:text;comment:申请人备注"`
+	ChipCounts    ChipCounts     `json:"chipCounts,omitempty" gorm:"serializer:json;type:json;comment:筹码明细:面值->个数"`
 	Status        string         `json:"status" gorm:"size:20;not null;index:idx_sr_game_status,priority:2;index:idx_sr_user_status,priority:2;comment:状态: pending-待审核, approved-已通过, rejected-已驳回, cancelled-已撤销"`
 	ReviewerID    *uint          `json:"reviewerId" gorm:"comment:审核人ID(场次创建者)"`
 	ReviewRemark  string         `json:"reviewRemark" gorm:"type:text;comment:审核备注/驳回理由"`
